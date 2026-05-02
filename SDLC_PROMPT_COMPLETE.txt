@@ -1,0 +1,785 @@
+================================================================================
+SMART DIAGRAM GENERATOR - COMPLETE SDLC PROMPT & IMPLEMENTATION
+================================================================================
+
+PROJECT TITLE: Intelligent Diagram Generator System (ER & DFD)
+VERSION: 2.0
+TYPE: Full-Stack Web Application
+DEPLOYMENT: Cloud-Ready
+LICENSE: MIT
+
+================================================================================
+PHASE 1: PLANNING & REQUIREMENTS
+================================================================================
+
+1.1 PROJECT OBJECTIVE
+---------------------
+Build a professional web-based diagram generator that allows users to create
+Entity-Relationship (ER) and Data Flow Diagrams (DFD) without login/registration.
+
+Key Features:
+- Drag-and-drop component system similar to draw.io
+- Support for ER and DFD diagrams
+- AI-powered generation from natural language
+- Export functionality (PNG, JSON)
+- Template system for common scenarios
+- Validation and suggestions engine
+
+1.2 TARGET USERS
+----------------
+1. Computer Science Students (primary)
+   - Learning database design
+   - Understanding data flow concepts
+   - Project development
+
+2. Junior Developers
+   - System design
+   - Database modeling
+   - Quick prototyping
+
+3. Educators
+   - Teaching database concepts
+   - Creating course materials
+   - Demonstration tool
+
+1.3 SCOPE (MVP)
+---------------
+Phase 1 - Core Features:
+✓ Drag-and-drop interface
+✓ Entity and Relationship nodes (ER)
+✓ Process and Data Store nodes (DFD)
+✓ Connection system
+✓ Export (PNG, JSON)
+✓ Basic validation
+✓ Template system
+
+Phase 2 - Enhancement (Future):
+- User authentication
+- Cloud storage
+- AI integration
+- Real-time collaboration
+- Advanced validation
+
+Phase 3 - Advanced (Later):
+- Mobile app
+- Database integration
+- API marketplace
+- Enterprise features
+
+================================================================================
+PHASE 2: REQUIREMENTS ANALYSIS
+================================================================================
+
+2.1 FUNCTIONAL REQUIREMENTS
+---------------------------
+
+FR1: Diagram Creation
+  - User can select diagram type (ER or DFD)
+  - User can drag components from sidebar to canvas
+  - User can connect components with relationship lines
+  - User can add labels to connections
+  - User can modify component properties
+
+FR2: Component Management
+  - ER Components: Entity, Relationship, Attribute
+  - DFD Components: External Entity, Process, Data Store, Data Flow
+  - Custom properties for each component type
+  - Primary key indicator for attributes
+
+FR3: Editing Features
+  - Drag to reposition nodes
+  - Zoom in/out functionality
+  - Pan across canvas
+  - Select multiple elements
+  - Delete elements
+  - Undo/Redo operations
+
+FR4: Template System
+  - Load pre-built diagrams
+  - Common database scenarios (student management, hospital, e-commerce)
+  - One-click loading
+  - Editable after loading
+
+FR5: Generation from Text
+  - Accept natural language description
+  - AI processes description
+  - Auto-generates diagram structure
+  - Allows manual refinement
+
+FR6: Export Functionality
+  - Export as PNG image
+  - Export as JSON for re-import
+  - Export with metadata
+  - Quality preservation
+
+FR7: Validation Engine
+  - Check for missing primary keys
+  - Detect M:N relationships
+  - Identify isolated entities
+  - Suggest improvements
+  - Show warnings and errors
+
+2.2 NON-FUNCTIONAL REQUIREMENTS
+-------------------------------
+
+NF1: Performance
+  - Diagram rendering < 500ms
+  - Export completion < 2 seconds
+  - Handle 100+ nodes smoothly
+  - Zoom/pan responsiveness < 100ms
+
+NF2: Scalability
+  - Support 1000+ simultaneous users (future)
+  - Store unlimited diagrams (with database)
+  - Handle large diagrams (500+ nodes)
+  - Optimize memory usage
+
+NF3: Security
+  - Input validation on all endpoints
+  - CORS enabled for production
+  - No sensitive data in client code
+  - Environment variables for keys
+
+NF4: Usability
+  - Intuitive interface
+  - Clear visual feedback
+  - Helpful error messages
+  - Mobile-responsive design (future)
+
+NF5: Reliability
+  - Error handling for network failures
+  - Graceful degradation
+  - Data persistence
+  - Backup mechanisms (future)
+
+NF6: Accessibility
+  - Keyboard navigation support
+  - Color contrast compliance
+  - Screen reader compatibility
+  - Clear labeling
+
+================================================================================
+PHASE 3: SYSTEM DESIGN & ARCHITECTURE
+================================================================================
+
+3.1 ARCHITECTURE OVERVIEW
+-------------------------
+
+┌─────────────────────────────────────────────────────────────┐
+│                     CLIENT LAYER (Frontend)                  │
+│                        React + React Flow                    │
+├─────────────────────────────────────────────────────────────┤
+│  • Component Library                                         │
+│  • Drag-and-drop Handler                                    │
+│  • Canvas Rendering                                         │
+│  • Export Manager                                           │
+│  • State Management                                         │
+└────────────────────────┬────────────────────────────────────┘
+                         │ HTTP/REST
+                         │
+┌────────────────────────▼────────────────────────────────────┐
+│                  API LAYER (Backend)                         │
+│                   Express.js Server                          │
+├─────────────────────────────────────────────────────────────┤
+│  • Route Handlers                                           │
+│  • Business Logic                                           │
+│  • Validation Engine                                        │
+│  • Export Processors                                        │
+│  • Template Manager                                         │
+└────────────────────────┬────────────────────────────────────┘
+                         │ Optional
+                         │
+┌────────────────────────▼────────────────────────────────────┐
+│               EXTERNAL SERVICES (Optional)                   │
+├─────────────────────────────────────────────────────────────┤
+│  • OpenAI API (Text generation)                            │
+│  • Database (MongoDB/PostgreSQL)                           │
+│  • Cloud Storage (AWS S3)                                  │
+└─────────────────────────────────────────────────────────────┘
+
+3.2 DATA MODELS
+---------------
+
+DIAGRAM STRUCTURE:
+{
+  id: string,
+  name: string,
+  type: "ER" | "DFD",
+  nodes: [
+    {
+      id: string,
+      type: "entity" | "relationship" | "process" | "datastore" | "externalentity",
+      position: { x: number, y: number },
+      data: {
+        label: string,
+        attributes?: string[],
+        properties?: object
+      }
+    }
+  ],
+  edges: [
+    {
+      id: string,
+      source: string,
+      target: string,
+      label?: string,
+      type?: "1:1" | "1:N" | "M:N"
+    }
+  ],
+  createdAt: timestamp,
+  updatedAt: timestamp
+}
+
+NODE TYPES:
+1. Entity (ER)
+   - label: string
+   - attributes: string[]
+   - primaryKey: string
+   - color: string
+
+2. Relationship (ER)
+   - label: string
+   - type: "1:1" | "1:N" | "M:N"
+
+3. Process (DFD)
+   - label: string
+   - number: string (e.g., "2.1")
+
+4. DataStore (DFD)
+   - label: string
+   - type: "Database" | "File" | "Cache"
+
+5. ExternalEntity (DFD)
+   - label: string
+   - role: string
+
+3.3 API ENDPOINTS
+-----------------
+
+CORE ENDPOINTS:
+
+Diagram Management:
+  POST   /generate-er          Generate ER diagram
+  POST   /generate-dfd         Generate DFD diagram
+  POST   /save-diagram         Save diagram
+  GET    /diagrams             Get all diagrams
+  GET    /diagrams/:id         Get specific diagram
+  DELETE /diagrams/:id         Delete diagram
+
+Templates:
+  GET    /templates            Get all templates
+  GET    /templates/:id        Get specific template
+
+Validation:
+  POST   /validate             Validate diagram design
+
+Export:
+  POST   /export/json          Export as JSON
+  POST   /export/png           Export as PNG (future)
+  POST   /export/pdf           Export as PDF (future)
+
+3.4 DATA FLOW
+-------------
+
+User Input Flow:
+1. User types description or drags components
+2. Frontend collects input (text/components)
+3. Sends to backend via POST
+4. Backend processes (AI or mock)
+5. Returns structured data (JSON)
+6. Frontend renders diagram
+7. User can export or save
+
+Drag-and-Drop Flow:
+1. User drags component from sidebar
+2. onDragStart captures component type
+3. onDragOver allows drop zone
+4. onDrop creates new node at position
+5. React Flow re-renders
+6. Node appears on canvas
+7. User can connect to other nodes
+
+Export Flow:
+1. User clicks export button
+2. Frontend captures canvas state
+3. Converts to required format
+4. Creates download blob
+5. Triggers browser download
+6. File saved to user's device
+
+================================================================================
+PHASE 4: IMPLEMENTATION PLAN
+================================================================================
+
+SPRINT 1 (Foundation - Week 1)
+==============================
+Tasks:
+□ Project setup (Node, React, Express)
+□ Basic server with CORS
+□ React app with React Flow
+□ Basic node components
+□ Drag-and-drop infrastructure
+□ Basic styling
+
+Expected Output:
+- Working drag-and-drop system
+- Can create and position nodes
+- Basic canvas functionality
+
+SPRINT 2 (Core Features - Week 2)
+=================================
+Tasks:
+□ ER diagram components (Entity, Relationship)
+□ DFD diagram components (Process, DataStore, etc.)
+□ Connection system
+□ Label management
+□ Zoom, Pan, MiniMap controls
+□ Improved UI/styling
+
+Expected Output:
+- Full ER diagram creation capability
+- Full DFD diagram creation capability
+- Professional UI appearance
+
+SPRINT 3 (Advanced Features - Week 3)
+====================================
+Tasks:
+□ Template system
+□ Export PNG functionality
+□ Export JSON functionality
+□ Backend save/load capability
+□ Validation engine
+□ Text-to-diagram generation (mock)
+
+Expected Output:
+- Template loading
+- Diagram export
+- Persistence layer
+- Validation feedback
+
+SPRINT 4 (Polish & Testing - Week 4)
+===================================
+Tasks:
+□ UI refinements
+□ Error handling
+□ Testing (manual & automated)
+□ Documentation
+□ Performance optimization
+□ Deployment configuration
+
+Expected Output:
+- Production-ready application
+- Complete documentation
+- Deployment pipeline
+
+================================================================================
+PHASE 5: TECHNOLOGY STACK
+================================================================================
+
+5.1 FRONTEND
+-----------
+Language: JavaScript (React)
+Version: React 18+
+Key Libraries:
+- @xyflow/react (Diagram rendering)
+- React Hooks (State management)
+- Fetch API (HTTP communication)
+- CSS3 (Styling, animations)
+
+Browser Support:
+- Chrome 90+
+- Firefox 88+
+- Safari 14+
+- Edge 90+
+
+Performance:
+- Bundle size: < 500KB
+- Initial load: < 2s
+- Rendering: 60 FPS
+
+5.2 BACKEND
+----------
+Language: JavaScript (Node.js)
+Runtime: Node.js 16+
+Framework: Express.js
+Key Packages:
+- express
+- cors
+- dotenv
+- (Optional) mongoose for MongoDB
+
+API Standard: REST
+Port: 5000
+
+Performance:
+- Response time: < 200ms
+- Concurrent users: 100+
+- Throughput: 1000 req/sec
+
+5.3 DATABASE (Optional/Future)
+------------------------------
+Primary: MongoDB
+  - Flexible schema
+  - Good for document storage
+  - Scales well
+
+Alternative: PostgreSQL
+  - Structured data
+  - Strong consistency
+  - Complex queries
+
+Connection:
+- Connection pooling
+- Indexed queries
+- Caching layer
+
+5.4 DEPLOYMENT
+--------------
+Frontend:
+- Host: Vercel, Netlify
+- CI/CD: GitHub Actions
+- CDN: Automatic
+
+Backend:
+- Host: Render, Railway, Heroku
+- CI/CD: GitHub Actions
+- Environment: Production-grade
+
+5.5 EXTERNAL SERVICES (Optional)
+--------------------------------
+AI Generation:
+- OpenAI API (GPT-3.5/4)
+- Hugging Face (open-source)
+- Local LLM (Ollama)
+
+Cloud Storage:
+- AWS S3 (file storage)
+- Google Cloud Storage
+- Azure Blob Storage
+
+Analytics:
+- Google Analytics
+- Mixpanel
+- Custom logging
+
+================================================================================
+PHASE 6: TESTING STRATEGY
+================================================================================
+
+6.1 UNIT TESTS
+--------------
+Components:
+- EntityNode rendering
+- RelationshipNode rendering
+- ProcessNode rendering
+- Connection validation
+
+Backend:
+- API endpoint responses
+- Validation logic
+- Export functions
+- Template loading
+
+Tools:
+- Jest (testing framework)
+- React Testing Library (components)
+- Supertest (API endpoints)
+
+Coverage Target: 80%+
+
+6.2 INTEGRATION TESTS
+--------------------
+Workflows:
+- Create diagram → Export → Re-import
+- Drag component → Connect → Validate
+- Load template → Modify → Save
+- Generate from text → Edit → Export
+
+Tools:
+- Cypress (E2E testing)
+- Playwright (cross-browser)
+
+6.3 PERFORMANCE TESTS
+--------------------
+Metrics:
+- Page load time < 2 seconds
+- Diagram rendering < 500ms
+- Export completion < 2 seconds
+- Handle 500+ nodes
+
+Tools:
+- Lighthouse
+- WebPageTest
+- Custom timing measurements
+
+6.4 SECURITY TESTS
+------------------
+Areas:
+- Input validation
+- XSS prevention
+- CSRF protection
+- API rate limiting
+- Data sanitization
+
+Tools:
+- OWASP ZAP
+- Burp Suite
+- Manual security review
+
+================================================================================
+PHASE 7: DEPLOYMENT & DEVOPS
+================================================================================
+
+7.1 DEVELOPMENT ENVIRONMENT
+---------------------------
+Setup:
+- Clone repository
+- npm install in backend and frontend
+- Create .env file
+- Run backend: node server.js
+- Run frontend: npm start
+- Access at http://localhost:3000
+
+Tools:
+- VS Code
+- Git
+- Terminal/Bash
+- Postman (API testing)
+
+7.2 STAGING ENVIRONMENT
+-----------------------
+Purpose:
+- Test before production
+- Performance testing
+- User acceptance testing
+
+Deployment:
+- Push to staging branch
+- Automated build and deploy
+- Run test suite
+- Generate reports
+
+7.3 PRODUCTION ENVIRONMENT
+--------------------------
+Infrastructure:
+- Load balancer
+- Multiple backend instances
+- CDN for static assets
+- Database replication
+
+Deployment:
+- Automated via CI/CD
+- Blue-green deployment
+- Rollback capability
+- Monitoring and alerts
+
+7.4 MONITORING & LOGGING
+------------------------
+Backend Monitoring:
+- Error tracking (Sentry)
+- Performance metrics (New Relic)
+- Log aggregation (ELK stack)
+- Uptime monitoring (Pingdom)
+
+Frontend Monitoring:
+- Error tracking
+- Performance monitoring
+- User analytics
+- Session recording
+
+Alerts:
+- High error rate
+- Slow response time
+- Server down
+- Out of memory
+
+================================================================================
+PHASE 8: MAINTENANCE & SUPPORT
+================================================================================
+
+8.1 BUG FIXES
+-------------
+Process:
+1. Report via GitHub Issues
+2. Reproduce issue
+3. Fix and test
+4. Deploy patch
+5. Document fix
+
+Priority Levels:
+- Critical: Server down, data loss (< 1 hour)
+- High: Major feature broken (< 4 hours)
+- Medium: Minor feature issue (< 1 day)
+- Low: Enhancement or minor fix (< 1 week)
+
+8.2 FEATURE UPDATES
+-------------------
+Quarterly releases:
+- Major features
+- Performance improvements
+- UI/UX enhancements
+- Documentation updates
+
+Monthly patches:
+- Bug fixes
+- Security updates
+- Dependency updates
+
+8.3 DOCUMENTATION
+-----------------
+Keep Updated:
+- API documentation
+- User guide
+- Developer guide
+- Video tutorials
+- FAQ
+
+8.4 COMMUNITY SUPPORT
+--------------------
+Channels:
+- GitHub Issues (technical)
+- Discussions (general questions)
+- Email support (critical issues)
+- Discord/Slack (community chat)
+
+================================================================================
+PHASE 9: SUCCESS METRICS
+================================================================================
+
+9.1 TECHNICAL METRICS
+--------------------
+Performance:
+- Page load time: < 2s ✓
+- Export time: < 2s ✓
+- API response: < 200ms ✓
+- 99.9% uptime
+
+Quality:
+- Test coverage: 80%+ ✓
+- Zero critical bugs
+- Code review: 2+ reviewers
+- Documentation: 100%
+
+9.2 USER METRICS
+----------------
+Adoption:
+- Daily active users: 100+
+- Monthly users: 1000+
+- Diagram creation rate: High
+- Export usage: > 50%
+
+Satisfaction:
+- User ratings: 4.5+ / 5.0
+- Support response: < 24 hours
+- Feature requests tracked
+- Community engagement
+
+9.3 BUSINESS METRICS
+-------------------
+Growth:
+- Traffic growth: 20% monthly
+- Template usage: > 30%
+- Repeat user rate: > 70%
+- Referral rate: > 20%
+
+Revenue (if applicable):
+- Freemium conversion rate
+- Premium feature adoption
+- Enterprise partnerships
+
+================================================================================
+PHASE 10: FUTURE ENHANCEMENTS
+================================================================================
+
+SHORT TERM (3 months):
+- User authentication
+- Cloud storage integration
+- Advanced templates
+- Mobile responsiveness
+
+MEDIUM TERM (6 months):
+- Real-time collaboration
+- Database integration
+- SQL generation from ER
+- PDF export
+- Advanced validation
+
+LONG TERM (1 year):
+- AI co-pilot
+- Mobile native app
+- Marketplace for templates
+- Enterprise features
+- API for third-party integration
+
+================================================================================
+QUICK START COMMAND REFERENCE
+================================================================================
+
+BACKEND:
+--------
+# Setup
+cd backend
+npm install express cors dotenv
+
+# Create .env
+echo "OPENAI_API_KEY=your_key" > .env
+
+# Run
+node server.js
+
+# Check
+curl http://localhost:5000
+
+FRONTEND:
+---------
+# Setup
+cd frontend
+npm install @xyflow/react
+
+# Run
+npm start
+
+# Test
+npm test
+
+FULL SETUP (from project root):
+-------------------------------
+# Create structure
+mkdir prj_1 && cd prj_1
+
+# Backend
+mkdir backend && cd backend
+npm init -y
+npm install express cors dotenv
+# Copy server.js here
+node server.js
+
+# In new terminal, Frontend
+npx create-react-app frontend
+cd frontend
+npm install @xyflow/react
+# Copy App.js to src/
+npm start
+
+ACCESS:
+-------
+Frontend: http://localhost:3000
+Backend: http://localhost:5000
+API Docs: http://localhost:5000
+
+================================================================================
+END OF SDLC PROMPT DOCUMENT
+================================================================================
+
+This document provides complete guidance for building the Smart Diagram 
+Generator from scratch. Follow each phase sequentially for best results.
+
+For questions or clarifications, refer to the DEVELOPMENT_GUIDE.txt file
+or the README in the project repository.
+
+Version: 2.0
+Last Updated: April 10, 2026
+License: MIT
+Author: Development Team
+
+================================================================================
