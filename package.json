@@ -9,7 +9,7 @@
     "backend": "cd backend && npm start",
     "frontend": "cd frontend && npm start",
     "dev": "npx concurrently \"npm run backend\" \"npm run frontend\"",
-    "build": "cd frontend && npm install && npm run build"
+    "build": "npm install && cd backend && npm install && cd ../frontend && npm install && npm run build"
   },
   "dependencies": {
     "concurrently": "^9.1.2"
