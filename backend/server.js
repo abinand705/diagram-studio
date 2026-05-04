@@ -383,12 +383,11 @@ const PORT = process.env.PORT || 5005;
 const path = require("path");
 app.use(express.static(path.join(__dirname, "../frontend/build")));
 
-// All other GET requests not handled will return the React app
-app.get("/:any*", (req, res) => {
+// All other requests not handled will return the React app
+app.use((req, res) => {
   res.sendFile(path.join(__dirname, "../frontend/build", "index.html"), (err) => {
     if (err) {
-      // Fallback if build doesn't exist yet
-      res.status(404).send("Smart Diagram Studio: Production build not found. Please run 'npm run build' in the frontend folder.");
+      res.status(404).send("Smart Diagram Studio: Production build not found.");
     }
   });
 });
