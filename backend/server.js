@@ -384,7 +384,7 @@ const path = require("path");
 app.use(express.static(path.join(__dirname, "../frontend/build")));
 
 // All other GET requests not handled will return the React app
-app.get("(.*)", (req, res) => {
+app.get("/:any*", (req, res) => {
   res.sendFile(path.join(__dirname, "../frontend/build", "index.html"), (err) => {
     if (err) {
       // Fallback if build doesn't exist yet
