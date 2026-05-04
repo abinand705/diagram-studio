@@ -203,7 +203,8 @@ function buildImageParsePrompt(userContext, diagramType = "auto") {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-app.get("/", (req, res) => {
+// Root status moved to /api/status to allow frontend to load at root
+app.get("/api/status", (req, res) => {
   res.json({
     message: "Smart Diagram Generator API v3.6.2 🚀",
     aiStatus: groq ? "Groq Connected ✅" : "Demo Mode ⚠️",
