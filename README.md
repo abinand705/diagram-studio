@@ -48,21 +48,17 @@ The **Smart Diagram Generator** is a feature-rich, full-screen application desig
 - [Firebase account](https://firebase.google.com/) (for cloud features)
 - [Google AI Studio API Key](https://aistudio.google.com/) (for real AI features)
 
-### 2. Backend Setup
+### 2. Quick Start (Unified)
+From the root folder:
 ```bash
-cd backend
-npm install
-node server.js
+npm run install-all    # Install all dependencies
+npm run dev            # Start both servers concurrently
 ```
-*Note: Add your API key to `.env` or use the in-app Settings panel.*
 
-### 3. Frontend Setup
-```bash
-cd frontend
-npm install
-npm start
-```
-*The app will be available at `http://localhost:3000`*
+### 3. Production Deployment
+1. Build the frontend: `npm run build` from root.
+2. Start the production server: `npm start` from root.
+*The backend is configured to serve the React production build automatically.*
 
 ---
 

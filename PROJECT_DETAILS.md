@@ -41,18 +41,11 @@ The **Smart Diagram Generator** is a professional-grade, full-stack application 
 ## 4. Project Structure
 ```text
 smart-diagram/
-├── backend/
-│   ├── server.js           # Main API server & AI logic
-│   ├── .env                # API keys and configuration
-│   └── package.json        # Backend dependencies
-├── frontend/
-│   ├── src/
-│   │   ├── App.js          # Core React component & UI
-│   │   ├── firebase.js     # Firebase configuration
-│   │   └── App.css         # Styling and design system
-│   ├── public/
-│   └── package.json        # Frontend dependencies
-└── documentation/          # Detailed guides and reference files
+├── backend/                # Node.js Express server & AI integration
+├── frontend/               # React application & Diagram canvas
+├── package.json            # Root configuration for unified control
+├── server.js               # Root launcher for the backend
+└── README.md               # Project overview and quick start
 ```
 
 ---
@@ -63,24 +56,30 @@ smart-diagram/
 - Node.js (v16.0.0 or higher)
 - npm or yarn
 
-### Installation & Running
-1. **Clone the repository** and navigate to the project folder.
-2. **Setup Backend**:
-   ```bash
-   cd backend
-   npm install
-   # Create a .env file and add GOOGLE_GENERATIVE_AI_API_KEY=your_key
-   node server.js
-   ```
-   *The server runs on `http://localhost:5000`.*
+### 1. Unified Setup (Recommended)
+From the project root:
+```bash
+npm run install-all   # Installs dependencies for all modules
+npm run dev           # Starts both Frontend and Backend concurrently
+```
 
-3. **Setup Frontend**:
-   ```bash
-   cd ../frontend
-   npm install
-   npm start
-   ```
-   *The application opens at `http://localhost:3000`.*
+### 2. Manual Setup
+If you prefer running them separately:
+
+**Backend**:
+```bash
+cd backend
+npm install
+npm start
+```
+
+**Frontend**:
+```bash
+cd frontend
+npm install
+npm start
+```
+*The application will be accessible at `http://localhost:3000`.*
 
 ---
 

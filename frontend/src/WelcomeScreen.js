@@ -33,7 +33,7 @@ const WelcomeScreen = ({ onSkip }) => {
           </svg>
         </div>
         <h1 className="app-title">Diagram Studio</h1>
-        <p className="app-version">v1.0.0</p>
+        <p className="app-version">v9.0</p>
         <p className="app-description">
           A powerful, intuitive workspace for mapping your ideas, designing architectures, and creating beautiful diagrams.
         </p>

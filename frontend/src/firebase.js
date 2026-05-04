@@ -77,3 +77,22 @@ export const listUserDiagrams = async (userId) => {
 export const deleteDiagramFromCloud = async (userId, diagramId) => {
   await deleteDoc(doc(db, "users", userId, "diagrams", diagramId));
 };
+
+// ============ SHARING HELPERS ============
+
+// Share a diagram publicly by copying it to a global shared collection
+export const shareDiagram = async (diagram) => {
+  const shareId = `share_${Math.random().toString(36).substring(2, 15)}`;
+  await setDoc(doc(db, "shared_diagrams", shareId), {
+    ...diagram,
+    sharedAt: serverTimestamp(),
+    id: shareId
+  });
+  return shareId;
+};
+
+// Get a publicly shared diagram by shareId
+export const getSharedDiagram = async (shareId) => {
+  const snap = await getDoc(doc(db, "shared_diagrams", shareId));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+};

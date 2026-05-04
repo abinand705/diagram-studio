@@ -1,10 +1,13 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { signInWithGoogle, signOutUser, onAuthChange, saveDiagramToCloud, listUserDiagrams, loadDiagramFromCloud, shareDiagram, getSharedDiagram } from "./firebase";
+import { signInWithGoogle, signOutUser, onAuthChange, saveDiagramToCloud, listUserDiagrams, loadDiagramFromCloud } from "./firebase";
 import { toPng, toJpeg, toSvg } from "html-to-image";
 import { jsPDF } from "jspdf";
 import dagre from "dagre";
 import DrawIoEdge from "./DrawIoEdge";
-import { applyAdvancedErLayout as runErLayoutEngine, generateChenDiagramV3 } from "./ErLayoutEngine";
+import EntityNode from "./EntityNode";
+import RelationshipNode from "./RelationshipNode";
+import AttributeNode from "./AttributeNode";
+
 import { SIDEBAR_CATEGORIES, getCustomShapeSvg, getConnectorPreviewSvg } from "./ShapesConfig";
 import {
   ReactFlow,
@@ -24,9 +27,9 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   Menu, Undo2, Redo2, Search, Type, PaintBucket,
-  ChevronDown, Save, FileJson, Image, Plus,
+  ChevronDown, Save, FileJson, Image, Plus, Sparkles, Trash2,
   AlignLeft, AlignCenter, AlignRight, Bold, Italic, Underline,
-  Wand2, Frame, Download, MoreHorizontal, Check, HelpCircle, Sparkles, FileText, Mail, Trash2, History, Share2
+  Wand2, Frame, Download, MoreHorizontal, Check, HelpCircle, FileText, Mail
 } from "lucide-react";
 
 const DottedUnderlineIcon = ({ size }) => (
@@ -40,6 +43,15 @@ const DottedUnderlineIcon = ({ size }) => (
 
 // Suppress harmless ResizeObserver errors in development
 if (typeof window !== 'undefined') {
+  const style = document.createElement('style');
+  style.innerHTML = `
+    .react-flow__edge-path {
+      stroke-opacity: 1 !important;
+      visibility: visible !important;
+    }
+  `;
+  document.head.appendChild(style);
+
   window.addEventListener('error', (e) => {
     if (e.message === 'ResizeObserver loop completed with undelivered notifications.' || e.message === 'ResizeObserver loop limit exceeded') {
       const resizeObserverErrDiv = document.getElementById('webpack-dev-server-client-overlay-div');
@@ -54,25 +66,27 @@ if (typeof window !== 'undefined') {
 
 // ==================== EDGE TYPES ====================
 const edgeTypes = {
-  drawio: DrawIoEdge
+  drawio: DrawIoEdge,
+  // NOTE: Do NOT add smoothstep/default/straight here — React Flow handles those natively.
+  // Adding them as undefined breaks native rendering.
 };
 
 // ==================== MODERN LIGHT THEME NODE COMPONENTS ====================
 
 // ==================== MODERN SVG FLOWCHART NODE ====================
 
-const handleStyle = { 
-  opacity: 1, 
-  width: "8px", 
-  height: "8px", 
-  background: "var(--theme-color)", 
+const handleStyle = {
+  opacity: 0, // Hidden but functional as requested
+  width: "8px",
+  height: "8px",
+  background: "var(--theme-color)",
   border: "1px solid #ffffff",
   minWidth: "8px",
   minHeight: "8px",
   zIndex: 1000
 };
 
-const getShapeSvg = (shape, stroke, strokeW, fill, label = '') => {
+const getShapeSvg = (shape, stroke, strokeW, fill) => {
   const custom = getCustomShapeSvg(shape, stroke, strokeW, fill, 100, 100);
   if (custom) return custom;
 
@@ -103,25 +117,7 @@ const getShapeSvg = (shape, stroke, strokeW, fill, label = '') => {
       return (
         <g>
           <rect x="0" y="0" width="100" height="100" fill="none" stroke="none" />
-          {!label && <text x="50" y="72" textAnchor="middle" fill={stroke} fontSize="64" opacity="0.2" fontFamily="serif" fontWeight="bold">T</text>}
-        </g>
-      );
-    case 'datastore':
-      return (
-        <g>
-          <rect x="0" y="0" width="100" height="100" fill={fill} stroke="none" />
-          <line x1="0" y1="0" x2="100" y2="0" stroke={stroke} strokeWidth={strokeW} vectorEffect="non-scaling-stroke" />
-          <line x1="0" y1="100" x2="100" y2="100" stroke={stroke} strokeWidth={strokeW} vectorEffect="non-scaling-stroke" />
-        </g>
-      );
-    case 'actor':
-      return (
-        <g transform="translate(25, 0) scale(0.5, 1)">
-           <circle cx="50" cy="20" r="15" fill={fill} stroke={stroke} strokeWidth={strokeW} />
-           <line x1="50" y1="35" x2="50" y2="75" stroke={stroke} strokeWidth={strokeW} />
-           <line x1="20" y1="50" x2="80" y2="50" stroke={stroke} strokeWidth={strokeW} />
-           <line x1="50" y1="75" x2="20" y2="100" stroke={stroke} strokeWidth={strokeW} />
-           <line x1="50" y1="75" x2="80" y2="100" stroke={stroke} strokeWidth={strokeW} />
+          <text x="50" y="72" textAnchor="middle" fill={stroke} fontSize="64" fontFamily="serif" fontWeight="bold">T</text>
         </g>
       );
     default:
@@ -174,8 +170,8 @@ const FlowchartNode = ({ id, data, selected }) => {
       const roundedDeg = Math.round(deg);
       setNodes((nds) => nds.map((n) => {
         if (n.id === id) {
-          return { 
-            ...n, 
+          return {
+            ...n,
             data: { ...n.data, rotation: roundedDeg }
           };
         }
@@ -204,162 +200,142 @@ const FlowchartNode = ({ id, data, selected }) => {
       return n;
     }));
   };
-  const handleStyle = {
-    opacity: selected ? 1 : 0,
-    width: 8,
-    height: 8,
-    background: 'white',
-    border: '1.5px solid #00aaff',
-    borderRadius: '1px',
-    transition: 'opacity 0.2s ease',
-    zIndex: 10,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center'
-  };
-
-  const xMark = selected ? <div style={{ position: 'absolute', fontSize: '10px', color: '#00aaff', fontWeight: 'bold', pointerEvents: 'none' }}>×</div> : null;
-
-  // Use state from props if passed, otherwise default to true for standalone
-  const animationsEnabled = data.showAnimations !== false;
 
   return (
-    <div className={animationsEnabled ? "anim-node-entrance" : ""} style={{ position: 'relative', width: '100%', height: '100%' }}>
-      {/* 8 FIXED CONNECTION POINTS (Draw.io Style) */}
-      <Handle id="port-0" type="source" position={Position.Top} style={{ ...handleStyle, top: 0, left: '50%' }}>{xMark}</Handle>
-      <Handle id="port-0-t" type="target" position={Position.Top} style={{ ...handleStyle, top: 0, left: '50%' }}>{xMark}</Handle>
-      
-      <Handle id="port-1" type="source" position={Position.Right} style={{ ...handleStyle, top: '50%', right: 0 }}>{xMark}</Handle>
-      <Handle id="port-1-t" type="target" position={Position.Right} style={{ ...handleStyle, top: '50%', right: 0 }}>{xMark}</Handle>
-      
-      <Handle id="port-2" type="source" position={Position.Bottom} style={{ ...handleStyle, bottom: 0, left: '50%' }}>{xMark}</Handle>
-      <Handle id="port-2-t" type="target" position={Position.Bottom} style={{ ...handleStyle, bottom: 0, left: '50%' }}>{xMark}</Handle>
-      
-      <Handle id="port-3" type="source" position={Position.Left} style={{ ...handleStyle, top: '50%', left: 0 }}>{xMark}</Handle>
-      <Handle id="port-3-t" type="target" position={Position.Left} style={{ ...handleStyle, top: '50%', left: 0 }}>{xMark}</Handle>
+    <div className="anim-node-entrance" style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* React Flow Handles - Using string positions for maximum reliability */}
+      <Handle id="port-0" type="source" position="top" style={handleStyle} />
+      <Handle id="port-0-t" type="target" position="top" style={handleStyle} />
+      <Handle id="port-1" type="source" position="right" style={handleStyle} />
+      <Handle id="port-1-t" type="target" position="right" style={handleStyle} />
+      <Handle id="port-2" type="source" position="bottom" style={handleStyle} />
+      <Handle id="port-2-t" type="target" position="bottom" style={handleStyle} />
+      <Handle id="port-3" type="source" position="left" style={handleStyle} />
+      <Handle id="port-3-t" type="target" position="left" style={handleStyle} />
 
-      {/* Corners */}
-      <Handle id="port-4" type="source" position={Position.Top} style={{ ...handleStyle, top: '15%', right: '15%' }}>{xMark}</Handle>
-      <Handle id="port-4-t" type="target" position={Position.Top} style={{ ...handleStyle, top: '15%', right: '15%' }}>{xMark}</Handle>
+      <Handle type="source" position="left" id="chen-left" style={{ ...handleStyle, top: '50%', background: '#ef4444', border: '1px solid white' }} />
+      <Handle type="target" position="left" id="chen-left-t" style={{ ...handleStyle, top: '50%', background: '#22c55e', border: '1px solid white' }} />
+      <Handle type="source" position="right" id="chen-right" style={{ ...handleStyle, top: '50%', background: '#ef4444', border: '1px solid white' }} />
+      <Handle type="target" position="right" id="chen-right-t" style={{ ...handleStyle, top: '50%', background: '#22c55e', border: '1px solid white' }} />
 
-      <Handle id="port-5" type="source" position={Position.Bottom} style={{ ...handleStyle, bottom: '15%', right: '15%' }}>{xMark}</Handle>
-      <Handle id="port-5-t" type="target" position={Position.Bottom} style={{ ...handleStyle, bottom: '15%', right: '15%' }}>{xMark}</Handle>
-
-      <Handle id="port-6" type="source" position={Position.Bottom} style={{ ...handleStyle, bottom: '15%', left: '15%' }}>{xMark}</Handle>
-      <Handle id="port-6-t" type="target" position={Position.Bottom} style={{ ...handleStyle, bottom: '15%', left: '15%' }}>{xMark}</Handle>
-
-      <Handle id="port-7" type="source" position={Position.Top} style={{ ...handleStyle, top: '15%', left: '15%' }}>{xMark}</Handle>
-      <Handle id="port-7-t" type="target" position={Position.Top} style={{ ...handleStyle, top: '15%', left: '15%' }}>{xMark}</Handle>
-
-      <NodeResizer 
-        color="#3b82f6" 
-        isVisible={selected} 
-        minWidth={60} 
-        minHeight={30} 
-        handleStyle={{ width: 10, height: 10, borderRadius: '2px', background: '#ffffff', border: `2px solid #3b82f6`, zIndex: 1001 }}
-        lineStyle={{ border: `1px dashed #3b82f6`, opacity: 0.8 }}
-        onResize={(evt, params) => {
+      <NodeResizer
+        color="#3b82f6"
+        isVisible={selected}
+        minWidth={40}
+        minHeight={30}
+        handleStyle={{ 
+          width: 10, 
+          height: 10, 
+          borderRadius: '2px', 
+          background: '#ffffff', 
+          border: `2px solid #3b82f6`, 
+          zIndex: 1001,
+          boxShadow: '0 2px 4px rgba(0,0,0,0.15)'
+        }}
+        lineStyle={{ border: `1px solid #3b82f6`, opacity: 1, borderRadius: shape === 'rectangle_rounded' ? '12px' : '0' }}
+        onResizeEnd={(evt, params) => {
           setNodes((nds) => nds.map((n) => {
             if (n.id === id) {
               return {
                 ...n,
-                data: { ...n.data, width: params.width, height: params.height }
+                style: { ...n.style, width: params.width, height: params.height }
               };
             }
             return n;
           }));
         }}
       />
-      <div 
-        ref={nodeRef} 
-        onDoubleClick={handleDoubleClick} 
-        style={{ 
-          position: 'relative', 
+      <div
+        ref={nodeRef}
+        onDoubleClick={handleDoubleClick}
+        style={{
+          position: 'relative',
           width: '100%',
           height: '100%',
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center', 
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           transform: `rotate(${rotation || 0}deg)`,
-          outline: selected ? '2px solid #3b82f6' : 'none',
-          outlineOffset: '2px',
+          // outline removed as NodeResizer handles the visual border
           borderRadius: shape === 'rectangle_rounded' ? '12px' : '0'
         }}
       >
-        
+
         {selected && (
           <div onPointerDown={handleRotateStart} style={{ position: 'absolute', top: -35, left: '50%', transform: 'translateX(-50%)', width: 14, height: 14, background: "#3b82f6", borderRadius: '50%', cursor: 'ew-resize', zIndex: 1100, border: '2px solid #fff', boxShadow: '0 2px 4px rgba(0,0,0,0.2)' }} />
         )}
 
         {/* SVG Background Layer */}
-      <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible', filter: 'var(--node-shadow)' }} preserveAspectRatio="none" viewBox="0 0 100 100">
-        {getShapeSvg(shape, selected ? "#3b82f6" : (data.strokeColor || "#000000"), selected ? 3 : (data.strokeWidth || 1.5), fill, label)}
-      </svg>
-      {/* Text Layer */}
-      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: textStyle.textAlign === 'left' ? 'flex-start' : (textStyle.textAlign === 'right' ? 'flex-end' : 'center'), width: '100%', height: '100%' }}>
-        {isEditing ? (
-           <textarea 
-             autoFocus 
-             defaultValue={label} 
-             onBlur={handleBlur} 
-             style={{ width: '90%', height: '80%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', ...textStyle, textAlign: textStyle.textAlign }} 
-             onKeyDown={(e) => { if(e.key === 'Escape') e.target.blur(); }}
-           />
-        ) : (
-           <div style={{ pointerEvents: 'none', userSelect: 'none', maxWidth: '90%', wordWrap: 'break-word', ...textStyle }}>{label}</div>
-        )}
+        <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible', filter: 'var(--node-shadow)' }} preserveAspectRatio="none" viewBox="0 0 100 100">
+          {getShapeSvg(shape, selected ? "#3b82f6" : (data.strokeColor || "#000000"), selected ? 3 : (data.strokeWidth || 1.5), fill)}
+        </svg>
+        {/* Text Layer */}
+        <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: textStyle.textAlign === 'left' ? 'flex-start' : (textStyle.textAlign === 'right' ? 'flex-end' : 'center'), width: '100%', height: '100%' }}>
+          {isEditing ? (
+            <textarea
+              autoFocus
+              defaultValue={label}
+              onBlur={handleBlur}
+              style={{ width: '90%', height: '80%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', ...textStyle, textAlign: textStyle.textAlign }}
+              onKeyDown={(e) => { if (e.key === 'Escape') e.target.blur(); }}
+            />
+          ) : (
+            <div style={{ pointerEvents: 'none', userSelect: 'none', maxWidth: '90%', wordWrap: 'break-word', ...textStyle }}>{label}</div>
+          )}
+        </div>
       </div>
-    </div>
     </div>
   );
 };
 
-const applyDagreLayout = (dataDiagram) => {
-  if (!dataDiagram) return { nodes: [], edges: [] };
-  
-  // v4.0 SYNC: If backend already provided a fully structured diagram, trust it
-  if (dataDiagram.nodes?.[0]?.position && dataDiagram.nodes?.[0]?.type === 'flowchart') {
-    console.log("Using Pre-Structured Backend Layout...");
-    return { 
-      nodes: dataDiagram.nodes, 
-      edges: dataDiagram.edges || [] 
-    };
-  }
 
-  // Fallback for older or unformatted AI responses
-  const rawNodes = (dataDiagram.nodes || []).map(n => ({
-    ...n,
-    type: 'flowchart',
-    data: { ...n.data, ...n }
-  }));
 
-  const { nodes: lNodes, edges: lEdges } = runErLayoutEngine(rawNodes, dataDiagram.edges || [], dataDiagram.diagramType || "");
-  
-  return { 
-    nodes: lNodes.map(n => ({ ...n, type: 'flowchart' })), 
-    edges: lEdges 
-  };
-};
 
 const nodeTypes = {
   flowchart: FlowchartNode,
+  entity: EntityNode,
+  relationship: RelationshipNode,
+  attribute: AttributeNode,
   anchor: ({ selected }) => (
-    <div style={{ width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      {/* Universal Anchor Handles */}
-      <Handle id="port-0" type="source" position={Position.Top} style={{ opacity: 0 }} />
-      <Handle id="port-0-t" type="target" position={Position.Top} style={{ opacity: 0 }} />
-      <Handle id="port-1" type="source" position={Position.Right} style={{ opacity: 0 }} />
-      <Handle id="port-1-t" type="target" position={Position.Right} style={{ opacity: 0 }} />
-      <Handle id="port-2" type="source" position={Position.Bottom} style={{ opacity: 0 }} />
-      <Handle id="port-2-t" type="target" position={Position.Bottom} style={{ opacity: 0 }} />
-      <Handle id="port-3" type="source" position={Position.Left} style={{ opacity: 0 }} />
-      <Handle id="port-3-t" type="target" position={Position.Left} style={{ opacity: 0 }} />
+    <div style={{ width: 8, height: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+      <Handle 
+        type="source" 
+        position={Position.Top} 
+        id="port-center" 
+        style={{ 
+          opacity: 0, 
+          width: 20, 
+          height: 20, 
+          background: 'transparent',
+          border: 'none',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: 10
+        }} 
+      />
+      <Handle 
+        type="target" 
+        position={Position.Top} 
+        id="port-center-t" 
+        style={{ 
+          opacity: 0, 
+          width: 20, 
+          height: 20, 
+          background: 'transparent',
+          border: 'none',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: 10
+        }} 
+      />
     </div>
   ),
 };
 
 // ==================== MAIN APP ====================
-const API_BASE = window.location.origin.includes("localhost") ? "http://127.0.0.1:5005" : "";
+const API_BASE = "http://" + window.location.hostname + ":5000";
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 function App() {
@@ -409,45 +385,30 @@ function App() {
       setOpenMenuSection(section);
     }
   }, [openMenuSection]);
-  
 
-const getThemeStyles = () => {
-  let base;
-  switch(themeMode) {
-    case 'dark': base = { '--bg': '#0f172a', '--panel-bg': '#000000', '--border': '#334155', '--text': '#e2e8f0', '--text-muted': '#94a3b8' }; break;
-    case 'red': base = { '--bg': '#450a0a', '--panel-bg': '#280000', '--border': '#7f1d1d', '--text': '#fecaca', '--text-muted': '#fca5a5' }; break;
-    case 'orange': base = { '--bg': '#431407', '--panel-bg': '#2a0a02', '--border': '#7c2d12', '--text': '#fed7aa', '--text-muted': '#fdba74' }; break;
-    case 'blue': base = { '--bg': '#082f49', '--panel-bg': '#021a2b', '--border': '#0369a1', '--text': '#bae6fd', '--text-muted': '#7dd3fc' }; break;
-    case 'green': base = { '--bg': '#052e16', '--panel-bg': '#021c0b', '--border': '#14532d', '--text': '#bbf7d0', '--text-muted': '#86efac' }; break;
-    case 'light':
-    default: base = { '--bg': '#F4F6F9', '--panel-bg': '#ffffff', '--border': '#e2e8f0', '--text': '#0f172a', '--text-muted': '#64748b' }; break;
-  }
-  
-  if (customAppearance.grid) {
-    base['--bg'] = customAppearance.grid;
-    // Auto-calculate text contrast for custom background
-    const hex = customAppearance.grid.replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16);
-    const g = parseInt(hex.substring(2, 4), 16);
-    const b = parseInt(hex.substring(4, 6), 16);
-    const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
-    if (yiq < 128) {
-      base['--text'] = '#ffffff';
-      base['--text-muted'] = '#cbd5e1';
-    } else {
-      base['--text'] = '#0f172a';
-      base['--text-muted'] = '#64748b';
+
+  const getThemeStyles = () => {
+    let base;
+    switch (themeMode) {
+      case 'dark': base = { '--bg': '#0f172a', '--panel-bg': '#000000', '--border': '#334155', '--text': '#e2e8f0', '--text-muted': '#94a3b8' }; break;
+      case 'red': base = { '--bg': '#450a0a', '--panel-bg': '#280000', '--border': '#7f1d1d', '--text': '#fecaca', '--text-muted': '#fca5a5' }; break;
+      case 'orange': base = { '--bg': '#431407', '--panel-bg': '#2a0a02', '--border': '#7c2d12', '--text': '#fed7aa', '--text-muted': '#fdba74' }; break;
+      case 'blue': base = { '--bg': '#082f49', '--panel-bg': '#021a2b', '--border': '#0369a1', '--text': '#bae6fd', '--text-muted': '#7dd3fc' }; break;
+      case 'green': base = { '--bg': '#052e16', '--panel-bg': '#021c0b', '--border': '#14532d', '--text': '#bbf7d0', '--text-muted': '#86efac' }; break;
+      case 'light':
+      default: base = { '--bg': '#F4F6F9', '--panel-bg': '#ffffff', '--border': '#e2e8f0', '--text': '#0f172a', '--text-muted': '#64748b' }; break;
     }
-  }
-  
-  if (customAppearance.shapes) base['--shapes-bg'] = customAppearance.shapes;
-  else base['--shapes-bg'] = themeMode === 'light' ? '#f8fafc' : base['--panel-bg'];
-  
-  if (customAppearance.format) base['--format-bg'] = customAppearance.format;
-  else base['--format-bg'] = base['--panel-bg'];
 
-  return base;
-};
+    if (customAppearance.grid) base['--bg'] = customAppearance.grid;
+    if (customAppearance.shapes) base['--shapes-bg'] = customAppearance.shapes;
+    else base['--shapes-bg'] = themeMode === 'light' ? '#f8fafc' : base['--panel-bg'];
+
+    if (customAppearance.format) base['--format-bg'] = customAppearance.format;
+    else base['--format-bg'] = base['--panel-bg'];
+
+    base['--theme-color'] = '#3b82f6';
+    return base;
+  };
 
 
   const clipboardRef = useRef([]);
@@ -461,32 +422,12 @@ const getThemeStyles = () => {
     const unsub = onAuthChange((user) => {
       setCurrentUser(user || null);
       if (user) {
-        listUserDiagrams(user.uid).then(setCloudDiagrams).catch(() => {});
+        listUserDiagrams(user.uid).then(setCloudDiagrams).catch(() => { });
       } else {
         setCloudDiagrams([]);
       }
     });
     return () => unsub();
-  }, []);
-
-  // Subscribe to URL Share ID
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const shareId = params.get('share');
-    if (shareId) {
-      getSharedDiagram(shareId).then(diagram => {
-        if (diagram) {
-          setNodes(diagram.nodes || []);
-          setEdges(diagram.edges || []);
-          setDiagramName(diagram.name || 'Shared Diagram');
-          setThemeMode(diagram.themeMode || 'light');
-          setCustomAppearance(diagram.customAppearance || { grid: '', shapes: '', format: '' });
-          // Clear query param without refreshing
-          window.history.replaceState({}, document.title, window.location.pathname);
-          setModalConfig({ type: 'alert', title: '🔗 Shared Diagram Loaded', message: `You are viewing "${diagram.name}". You can edit it and save it to your own history.` });
-        }
-      }).catch(() => {});
-    }
   }, []);
 
   const openDrawer = () => { setIsMainMenuClosing(false); setIsMainMenuRendered(true); };
@@ -495,6 +436,9 @@ const getThemeStyles = () => {
   const [diagramType] = useState("DFD");
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  useEffect(() => {
+    console.log("Current edges state:", edges);
+  }, [edges]);
   const fileInputRef = useRef(null);
   const [diagramName, setDiagramName] = useState("Unnamed File(1)");
   const [draggedItem, setDraggedItem] = useState(null);
@@ -504,50 +448,34 @@ const getThemeStyles = () => {
   const [snappedPort, setSnappedPort] = useState(null);
   const [formatBrush, setFormatBrush] = useState(null);
   const [lastConnectorStyle, setLastConnectorStyle] = useState({ routing: 'sharp', markerEnd: 'arrow' });
-  const [isAiProcessing, setIsAiProcessing] = useState(false);
-  const [aiStatusMessage, setAiStatusMessage] = useState("Analyzing request...");
-  const [selectedAiFile, setSelectedAiFile] = useState(null);
+
   const [hoveredShape, setHoveredShape] = useState(null);
   const mouseGlowRef = useRef(null);
   const reactFlowRef = useRef(null);
 
-  // Cycle AI status messages
-  useEffect(() => {
-    if (!isAiProcessing) return;
-    const messages = [
-      "Analyzing request...",
-      "Designing layout structure...",
-      "Structuring nodes and attributes...",
-      "Calculating optimal grid positions...",
-      "Refining connector paths...",
-      "Finalizing diagram aesthetics..."
-    ];
-    let idx = 0;
-    const interval = setInterval(() => {
-      idx = (idx + 1) % messages.length;
-      setAiStatusMessage(messages[idx]);
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [isAiProcessing]);
+
 
   const displayNodes = useMemo(() => {
     const waypointNodes = drawingEdgeState && drawingEdgePoints.length > 0
       ? drawingEdgePoints.map((p, i) => ({
-          id: `drawing_wp_${i}`,
-          position: p,
-          data: { label: '' },
-          style: { width: 10, height: 10, borderRadius: '50%', background: '#0ea5e9', border: '2px solid #fff', transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 1000 }
-        }))
+        id: `drawing_wp_${i}`,
+        position: p,
+        data: { label: '' },
+        style: { width: 10, height: 10, borderRadius: '50%', background: '#0ea5e9', border: '2px solid #fff', transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 1000 }
+      }))
       : [];
 
     if (!drawingEdgeState || drawingEdgePoints.length === 0) return nodes;
+    
+    // Stabilize start point: if drawingEdgePoints[0] was snapped, it's already snapped in handlePaneClick.
     const start = drawingEdgePoints[0];
     const end = drawingPreviewPoint || drawingEdgePoints[drawingEdgePoints.length - 1];
+    
     return [
       ...nodes,
       ...waypointNodes,
-      { id: 'drawing_source', position: start, data: { label: '' }, style: { width: 1, height: 1, opacity: 0 } },
-      { id: 'drawing_target', position: end, data: { label: '' }, style: { width: 1, height: 1, opacity: 0 } }
+      { id: 'drawing_source', type: 'anchor', position: start, data: { isFirstPoint: true }, style: { width: 1, height: 1, opacity: 0 }, draggable: false },
+      { id: 'drawing_target', type: 'anchor', position: end, data: {}, style: { width: 1, height: 1, opacity: 0 } }
     ];
   }, [nodes, drawingEdgeState, drawingEdgePoints, drawingPreviewPoint]);
 
@@ -556,8 +484,18 @@ const getThemeStyles = () => {
     return [
       ...edges,
       {
-         id: 'drawing_edge', source: 'drawing_source', target: 'drawing_target', type: 'drawio',
-         data: { routing: drawingEdgeState.routing || 'sharp', stroke: '#0ea5e9', strokeDash: [6,6], waypoints: drawingEdgePoints.slice(1) }
+        id: 'drawing_edge', source: 'drawing_source', target: 'drawing_target', type: 'drawio',
+        sourceHandle: 'port-center', targetHandle: 'port-center-t',
+        data: { 
+          routing: drawingEdgeState.routing || 'sharp', 
+          stroke: '#0ea5e9', 
+          strokeDash: [6, 6], 
+          waypoints: drawingEdgePoints.slice(1),
+          fallbackStartX: drawingEdgePoints[0].x,
+          fallbackStartY: drawingEdgePoints[0].y,
+          fallbackEndX: (drawingPreviewPoint || drawingEdgePoints[drawingEdgePoints.length - 1]).x,
+          fallbackEndY: (drawingPreviewPoint || drawingEdgePoints[drawingEdgePoints.length - 1]).y
+        }
       }
     ];
   }, [edges, drawingEdgeState, drawingEdgePoints, drawingPreviewPoint]);
@@ -570,57 +508,10 @@ const getThemeStyles = () => {
   const [past, setPast] = useState([]);
   const [future, setFuture] = useState([]);
 
-  const currentStateRef = useRef({ nodes, edges, past, future, diagramName, activePageIndex, pages, themeMode, customAppearance, cloudDiagramId, isMainMenuRendered: false });
+  const currentStateRef = useRef({ nodes, edges, past, future, diagramName, activePageIndex, pages, isMainMenuRendered: false });
   useEffect(() => {
-    currentStateRef.current = { nodes, edges, past, future, diagramName, activePageIndex, pages, themeMode, customAppearance, cloudDiagramId, isMainMenuRendered };
-  }, [nodes, edges, past, future, diagramName, activePageIndex, pages, themeMode, customAppearance, cloudDiagramId, isMainMenuRendered]);
-
-  const saveToLocalHistory = useCallback(async (name, nodes, edges, themeMode, customAppearance) => {
-    try {
-      const saved = localStorage.getItem('diagram_history');
-      let history = saved ? JSON.parse(saved) : [];
-      const newItem = { id: Date.now(), name, nodes, edges, themeMode, customAppearance, timestamp: new Date().toLocaleTimeString() };
-      history = [newItem, ...history.filter(h => h.name !== name)].slice(0, 20);
-      localStorage.setItem('diagram_history', JSON.stringify(history));
-
-      // NEW: Cloud History Sync if logged in
-      if (currentUser) {
-        saveDiagramToCloud(currentUser.uid, { name, nodes, edges, themeMode, customAppearance }).catch(console.error);
-      }
-    } catch(e) {}
-  }, [currentUser]);
-
-  const takeSnapshot = useCallback(() => {
-    const { nodes: cNodes, edges: cEdges, past: cPast, diagramName: cName, themeMode: cTheme, customAppearance: cCustom } = currentStateRef.current;
-    setPast([...cPast, { nodes: cNodes, edges: cEdges }]);
-    setFuture([]);
-    saveToLocalHistory(cName, cNodes, cEdges, cTheme, cCustom);
-  }, [saveToLocalHistory]);
-
-  const undo = useCallback(() => {
-    const { past: cPast, future: cFuture, nodes: cNodes, edges: cEdges } = currentStateRef.current;
-    if (cPast.length === 0) return;
-    const previous = cPast[cPast.length - 1];
-    setPast(cPast.slice(0, -1));
-    setFuture([{ nodes: cNodes, edges: cEdges }, ...cFuture]);
-    setNodes(previous.nodes);
-    setEdges(previous.edges);
-  }, [setNodes, setEdges]);
-
-  // v9.0 Sync global animation toggle to all nodes
-  useEffect(() => {
-    setNodes(nds => nds.map(n => ({ ...n, data: { ...n.data, showAnimations } })));
-  }, [showAnimations, setNodes]);
-
-  const redo = useCallback(() => {
-    const { past: cPast, future: cFuture, nodes: cNodes, edges: cEdges } = currentStateRef.current;
-    if (cFuture.length === 0) return;
-    const next = cFuture[0];
-    setPast([...cPast, { nodes: cNodes, edges: cEdges }]);
-    setFuture(cFuture.slice(1));
-    setNodes(next.nodes);
-    setEdges(next.edges);
-  }, [setNodes, setEdges]);
+    currentStateRef.current = { nodes, edges, past, future, diagramName, activePageIndex, pages, isMainMenuRendered };
+  }, [nodes, edges, past, future, diagramName, activePageIndex, pages, isMainMenuRendered]);
 
   const exportDiagram = async (format) => {
     // Temporary deselect to avoid highlighting in export
@@ -631,8 +522,8 @@ const getThemeStyles = () => {
     await new Promise(resolve => setTimeout(resolve, 100));
 
     const filterFn = (node) => !(
-      node?.classList?.contains('react-flow__controls') || 
-      node?.classList?.contains('react-flow__panel') || 
+      node?.classList?.contains('react-flow__controls') ||
+      node?.classList?.contains('react-flow__panel') ||
       node?.classList?.contains('react-flow__minimap') ||
       node?.classList?.contains('react-flow__node-anchor') ||
       node?.classList?.contains('react-flow__resize-control') ||
@@ -641,10 +532,10 @@ const getThemeStyles = () => {
     if (format === "png" || format === "jpeg" || format === "svg") {
       const flowElement = document.querySelector('.react-flow');
       if (flowElement) {
-         let exportFn = toPng;
-         if (format === "jpeg") exportFn = toJpeg;
-         if (format === "svg") exportFn = toSvg;
-         exportFn(flowElement, { filter: filterFn, backgroundColor: format === 'jpeg' ? '#ffffff' : undefined })
+        let exportFn = toPng;
+        if (format === "jpeg") exportFn = toJpeg;
+        if (format === "svg") exportFn = toSvg;
+        exportFn(flowElement, { filter: filterFn, backgroundColor: format === 'jpeg' ? '#ffffff' : undefined })
           .then((dataUrl) => {
             const link = document.createElement("a");
             link.href = dataUrl;
@@ -652,7 +543,7 @@ const getThemeStyles = () => {
             link.click();
           });
       } else {
-         alert("Could not locate diagram container for export.");
+        alert("Could not locate diagram container for export.");
       }
     } else if (format === "json") {
       const data = JSON.stringify({ name: diagramName, nodes, edges }, null, 2);
@@ -729,84 +620,46 @@ const getThemeStyles = () => {
   };
 
   const switchPage = useCallback((newIndex) => {
-    const { nodes: cNodes, edges: cEdges, past: cPast, future: cFuture, diagramName: cName, activePageIndex: cIndex, pages: cPages, themeMode: cTheme, customAppearance: cCustom, cloudDiagramId: cCloudId } = currentStateRef.current;
+    const { nodes: cNodes, edges: cEdges, past: cPast, future: cFuture, diagramName: cName, activePageIndex: cIndex, pages: cPages } = currentStateRef.current;
     if (newIndex < 0 || newIndex > cPages.length) return;
-    
+
     const savedPages = [...cPages];
-    savedPages[cIndex] = { ...savedPages[cIndex], name: cName, nodes: cNodes, edges: cEdges, past: cPast, future: cFuture, themeMode: cTheme, customAppearance: cCustom, cloudDiagramId: cCloudId };
-    
+    savedPages[cIndex] = { ...savedPages[cIndex], name: cName, nodes: cNodes, edges: cEdges, past: cPast, future: cFuture };
+
     if (newIndex === savedPages.length) {
-      savedPages.push({ id: Date.now(), name: `Unnamed File(${savedPages.length + 1})`, nodes: [], edges: [], past: [], future: [], themeMode: 'light', customAppearance: { grid: '', shapes: '', format: '' }, cloudDiagramId: null });
+      savedPages.push({ id: Date.now(), name: `Unnamed File(${savedPages.length + 1})`, nodes: [], edges: [], past: [], future: [] });
     }
 
     setPages(savedPages);
     setActivePageIndex(newIndex);
-    
+
     const targetPage = savedPages[newIndex];
     setNodes(targetPage.nodes);
     setEdges(targetPage.edges);
     setDiagramName(targetPage.name);
     setPast(targetPage.past);
     setFuture(targetPage.future);
-    setThemeMode(targetPage.themeMode || 'light');
-    setCustomAppearance(targetPage.customAppearance || { grid: '', shapes: '', format: '' });
-    setCloudDiagramId(targetPage.cloudDiagramId || null);
-  }, [setNodes, setEdges]);
-
-  const openFromHistory = useCallback((h) => {
-    const { nodes: cNodes, edges: cEdges, past: cPast, future: cFuture, diagramName: cName, activePageIndex: cIndex, pages: cPages, themeMode: cTheme, customAppearance: cCustom, cloudDiagramId: cCloudId } = currentStateRef.current;
-    
-    // Save current page state
-    const savedPages = [...cPages];
-    savedPages[cIndex] = { ...savedPages[cIndex], name: cName, nodes: cNodes, edges: cEdges, past: cPast, future: cFuture, themeMode: cTheme, customAppearance: cCustom, cloudDiagramId: cCloudId };
-    
-    // Add new page with history data
-    const newHistoryName = `${h.name} (history)`;
-    const newPageIndex = savedPages.length;
-    savedPages.push({ 
-      id: Date.now(), 
-      name: newHistoryName, 
-      nodes: h.nodes, 
-      edges: h.edges, 
-      past: [], 
-      future: [],
-      themeMode: h.themeMode || 'light',
-      customAppearance: h.customAppearance || { grid: '', shapes: '', format: '' },
-      cloudDiagramId: null
-    });
-    
-    setPages(savedPages);
-    setActivePageIndex(newPageIndex);
-    setNodes(h.nodes);
-    setEdges(h.edges);
-    setDiagramName(newHistoryName);
-    setThemeMode(h.themeMode || 'light');
-    setCustomAppearance(h.customAppearance || { grid: '', shapes: '', format: '' });
-    setCloudDiagramId(null);
-    setPast([]);
-    setFuture([]);
-    setModalConfig(null);
   }, [setNodes, setEdges]);
 
   const triggerErrorShake = useCallback(() => {
     setIsShaking(true);
-    setTimeout(() => setIsShaking(false), 400); 
-    
+    setTimeout(() => setIsShaking(false), 400);
+
     try {
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const oscillator = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
-      
+
       oscillator.type = 'triangle';
-      oscillator.frequency.setValueAtTime(150, audioCtx.currentTime); 
+      oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
       oscillator.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.1);
-      
+
       gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
       gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-      
+
       oscillator.connect(gainNode);
       gainNode.connect(audioCtx.destination);
-      
+
       oscillator.start();
       oscillator.stop(audioCtx.currentTime + 0.1);
     } catch (err) {
@@ -818,150 +671,28 @@ const getThemeStyles = () => {
     const { pages: cPages, activePageIndex: cIndex } = currentStateRef.current;
     if (cPages.length <= 1) {
       triggerErrorShake();
-      setModalConfig({ 
-        type: 'alert', 
-        title: "Action Restricted", 
-        message: "You cannot delete the only remaining page in your workspace." 
+      setModalConfig({
+        type: 'alert',
+        title: "Action Restricted",
+        message: "You cannot delete the only remaining page in your workspace."
       });
       return;
     }
     const newPages = cPages.filter((_, i) => i !== cIndex);
     const newActiveIndex = cIndex === cPages.length - 1 ? cIndex - 1 : cIndex;
-    
+
     setPages(newPages);
     setActivePageIndex(newActiveIndex);
-    
+
     const targetPage = newPages[newActiveIndex];
-    setNodes(targetPage.nodes || []);
-    setEdges(targetPage.edges || []);
-    setDiagramName(targetPage.name || 'Unnamed');
-    setPast(targetPage.past || []);
-    setFuture(targetPage.future || []);
-    setThemeMode(targetPage.themeMode || 'light');
-    setCustomAppearance(targetPage.customAppearance || { grid: '', shapes: '', format: '' });
-    setCloudDiagramId(targetPage.cloudDiagramId || null);
+    setNodes(targetPage.nodes);
+    setEdges(targetPage.edges);
+    setDiagramName(targetPage.name);
+    setPast(targetPage.past);
+    setFuture(targetPage.future);
   }, [setNodes, setEdges, triggerErrorShake]);
 
-  // AI API Handlers
-  const handleGenerateDiagram = async (prompt) => {
-    setIsAiProcessing(true);
-    setModalConfig(null);
-    try {
-      const resp = await fetch(`${API_BASE}/api/ai/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, type: "auto-detect" })
-      });
-      const data = await resp.json();
-      if (data.success) {
-        takeSnapshot();
-        const { nodes: lNodes, edges: lEdges } = applyDagreLayout(data.diagram);
-        
-        // v5.0 NATIVE RESTORATION: Render nodes first
-        setNodes(lNodes);
-        
-        setTimeout(() => {
-          // Force edges to use the NATIVE high-stability engine
-          const nativeEdges = (lEdges || []).map(e => ({
-            ...e,
-            type: 'default', // Using high-stability native edge
-            animated: true,
-            style: { stroke: '#3b82f6', strokeWidth: 2.5 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6' }
-          }));
-          
-          setEdges(nativeEdges);
-          if (rfInstance) rfInstance.fitView({ padding: 0.2, duration: 800 });
-          
-          setPages(prev => prev.map((p, idx) => 
-            idx === activePageIndex ? { ...p, nodes: lNodes, edges: nativeEdges } : p
-          ));
-        }, 150);
 
-        setModalConfig({ 
-          type: 'alert', 
-          title: '✨ Diagram Generated', 
-          message: `Successfully rendered ${lNodes.length} shapes and ${lEdges.length} connections using the High-Stability engine.` 
-        });
-      } else {
-        setModalConfig({ type: 'alert', title: 'AI Error', message: data.error || "Generation failed." });
-      }
-    } catch (err) {
-      setModalConfig({ type: 'alert', title: 'Connection Error', message: `Could not reach the AI backend at ${API_BASE}. Ensure it is running.` });
-    } finally {
-      setIsAiProcessing(false);
-    }
-  };
-
-  const handleParseImage = async (file, description, diagramType = "auto") => {
-    setIsAiProcessing(true);
-    setModalConfig(null);
-    const formData = new FormData();
-    formData.append("image", file);
-    if (description) formData.append("context", description);
-    if (diagramType) formData.append("diagramType", diagramType);
-
-    try {
-      const resp = await fetch(`${API_BASE}/api/ai/parse-image`, {
-        method: "POST",
-        body: formData
-      });
-      const data = await resp.json();
-      if (data.success) {
-        takeSnapshot();
-        const { nodes: lNodes, edges: lEdges } = applyDagreLayout(data.diagram);
-        
-        // v9.0 Atomic Page Creation: Always generate in a new page
-        const newPageId = pages.length + 1;
-        const newPageName = `AI Generated (${newPageId})`;
-        const newPage = { id: newPageId, name: newPageName, nodes: lNodes, edges: lEdges, past: [], future: [] };
-        
-        setPages(prev => [...prev, newPage]);
-        setActivePageIndex(pages.length); // Switch to the new page
-        setNodes(lNodes);
-        setDiagramName(newPageName);
-        const nativeEdges = (lEdges || []).map(e => ({
-          ...e,
-          type: 'default',
-          animated: true,
-          style: { stroke: '#3b82f6', strokeWidth: 2.5 },
-          markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6' }
-        }));
-
-        setTimeout(() => {
-          setEdges(nativeEdges);
-          if (rfInstance) rfInstance.fitView({ padding: 0.2, duration: 800 });
-          setPages(prev => prev.map((p, idx) => 
-            idx === activePageIndex ? { ...p, nodes: lNodes, edges: nativeEdges } : p
-          ));
-        }, 150);
-
-        // Build validation report
-        const stats = data.stats || {};
-        const validation = data.validation || {};
-        const diagramType = data.diagramType || "Unknown";
-
-        let reportLines = [
-          `📊 Detected: ${diagramType} diagram`, 
-          `✅ ${stats.nodes || 0} nodes, ${stats.edges || 0} edges placed on canvas`,
-          `\n🙏 APOLOGY & DISCLAIMER:`,
-          `This is a BETA version. We apologize for any misinterpretations, incorrect labels, or missing connections. We are working hard to improve our vision models.`
-        ];
-
-        setModalConfig({
-          type: 'alert',
-          title: '✨ Image-to-Diagram Complete',
-          message: reportLines.join('\n')
-        });
-      } else {
-        setModalConfig({ type: 'alert', title: 'AI Error', message: data.error || "Image parsing failed." });
-      }
-    } catch (err) {
-      setModalConfig({ type: 'alert', title: 'Connection Error', message: "Could not reach the AI backend." });
-    } finally {
-      setIsAiProcessing(false);
-    }
-  };
 
   // ---- KEYBOARD SHORTCUTS ----
   useEffect(() => {
@@ -975,10 +706,7 @@ const getThemeStyles = () => {
 
       if (isCtrl && !isShift) {
         switch (e.key.toLowerCase()) {
-          case 's': 
-            e.preventDefault(); 
-            saveDiagram(); 
-            break;
+          case 's': e.preventDefault(); saveDiagram(); break;
           case 'z': e.preventDefault(); undo(); break;
           case 'y': e.preventDefault(); redo(); break;
           case 'a': e.preventDefault(); setNodes(nds => nds.map(n => ({ ...n, selected: true }))); setEdges(eds => eds.map(ee => ({ ...ee, selected: true }))); break;
@@ -993,7 +721,7 @@ const getThemeStyles = () => {
         }
       } else if (isCtrl && isShift) {
         switch (e.key.toLowerCase()) {
-          case 's': e.preventDefault(); saveAsJson(); break; // Explicitly handle Ctrl+Shift+S here too for safety
+          case 's': e.preventDefault(); saveAsDiagram(); break;
           case 'a': e.preventDefault(); setNodes(nds => nds.map(n => ({ ...n, selected: false }))); setEdges(eds => eds.map(ee => ({ ...ee, selected: false }))); break;
           case 'g': e.preventDefault(); setShowGrid(g => !g); break;
           case 'p': e.preventDefault(); setShowPageView(p => !p); break;
@@ -1005,7 +733,7 @@ const getThemeStyles = () => {
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (!e.target.closest('.react-flow__node')) { // Only if not editing
-             handleEditMenu('Delete');
+          handleEditMenu('Delete');
         }
       }
     };
@@ -1024,10 +752,10 @@ const getThemeStyles = () => {
       const sidebar = document.querySelector('.sidebar-shapes-panel');
       if (sidebar && sidebar.contains(e.target)) return;
       if (currentStateRef.current.isMainMenuRendered || modalConfig) return; // Disable swipe when drawer or modal is open
-      
+
       const now = Date.now();
       if (now - lastSwipeTime.current < 600) return;
-      
+
       if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
         if (Math.abs(e.deltaX) > 50) {
           lastSwipeTime.current = now;
@@ -1051,15 +779,32 @@ const getThemeStyles = () => {
     return () => { window.removeEventListener('wheel', handleWheel); document.body.style.overscrollBehavior = 'auto'; };
   }, [switchPage, deletePage, saveDiagram]);
 
+  const takeSnapshot = () => {
+    setPast((p) => [...p.slice(-40), { nodes, edges }]);
+    setFuture([]);
+  };
 
+  const undo = () => {
+    if (past.length === 0) return;
+    const previous = past[past.length - 1];
+    setPast((p) => p.slice(0, -1));
+    setFuture((f) => [{ nodes, edges }, ...f]);
+    setNodes(previous.nodes);
+    setEdges(previous.edges);
+  };
+
+  const redo = () => {
+    if (future.length === 0) return;
+    const next = future[0];
+    setFuture((f) => f.slice(1));
+    setPast((p) => [...p, { nodes, edges }]);
+    setNodes(next.nodes);
+    setEdges(next.edges);
+  };
 
   const selectedNode = nodes.find((n) => n.selected);
   const hasSelectedNode = !!selectedNode;
   const selectedData = selectedNode?.data || {};
-
-  const selectedEdge = edges.find((e) => e.selected);
-  const hasSelectedEdge = !!selectedEdge;
-  const activeData = selectedNode ? selectedData : (selectedEdge?.data || {});
 
   const updateSelectedNodes = (updates) => {
     takeSnapshot();
@@ -1073,16 +818,29 @@ const getThemeStyles = () => {
 
   const formatBrushRef = useRef(null);
 
-  const handleFormatBrushClick = () => {
+  const handleFormatBrushClick = (e) => {
+    e.stopPropagation(); // Prevent deselecting current node
     if (formatBrush) {
-      // Second click on the button cancels the brush
       setFormatBrush(null);
       formatBrushRef.current = null;
     } else if (selectedNode) {
-      // Capture all style props except label and shapeType
-      const { label, shapeType, tooltip, link, ...formattingProps } = selectedData;
-      setFormatBrush(formattingProps);
-      formatBrushRef.current = formattingProps;
+      // Capture all visual formatting props
+      const { 
+        fillColor, strokeColor, strokeWidth, 
+        fontFamily, fontSize, bold, italic, 
+        underline, dottedUnderline, textAlign, color 
+      } = selectedData;
+      
+      const brush = { 
+        fillColor, strokeColor, strokeWidth, 
+        fontFamily, fontSize, bold, italic, 
+        underline, dottedUnderline, textAlign, color 
+      };
+      
+      setFormatBrush(brush);
+      formatBrushRef.current = brush;
+    } else {
+      setModalConfig({ type: 'alert', title: 'Format Painter', message: 'Select a node first to copy its formatting.' });
     }
   };
 
@@ -1129,10 +887,10 @@ const getThemeStyles = () => {
   };
 
   const handleShapeClick = (item) => {
-    if (!IS_MOBILE) return; 
-    
+    if (!IS_MOBILE) return;
+
     takeSnapshot();
-    const centerPos = rfInstance 
+    const centerPos = rfInstance
       ? rfInstance.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
       : { x: 300, y: 300 };
 
@@ -1141,7 +899,7 @@ const getThemeStyles = () => {
       const sourceId = `anchor_${ts}_start`;
       const targetId = `anchor_${ts}_end`;
       const startPoint = { x: centerPos.x - 80, y: centerPos.y };
-      const endPoint   = { x: centerPos.x + 80, y: centerPos.y };
+      const endPoint = { x: centerPos.x + 80, y: centerPos.y };
 
       const anchorStyle = { width: 8, height: 8, background: '#0ea5e9', border: '2px solid #ffffff', borderRadius: '50%', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', padding: 0, margin: '-4px 0 0 -4px' };
       const sourceNode = { id: sourceId, type: 'anchor', position: startPoint, style: anchorStyle, data: {}, selectable: true, draggable: true, selected: false };
@@ -1152,8 +910,8 @@ const getThemeStyles = () => {
         id: `edge_${ts}`,
         source: sourceId,
         target: targetId,
-        sourceHandle: 'port-1',
-        targetHandle: 'port-3-t',
+        sourceHandle: 'port-center',
+        targetHandle: 'port-center-t',
         type: 'drawio',
         data: {
           routing: item.routing || 'straight',
@@ -1163,6 +921,10 @@ const getThemeStyles = () => {
           markerStart: item.startArrow || 'none',
           markerEnd: item.endArrow || 'none',
           waypoints: [],
+          fallbackStartX: startPoint.x,
+          fallbackStartY: startPoint.y,
+          fallbackEndX: endPoint.x,
+          fallbackEndY: endPoint.y,
         },
       };
 
@@ -1173,12 +935,12 @@ const getThemeStyles = () => {
         id: `node_${Date.now()}`,
         type: "flowchart",
         position: centerPos,
-        style: { 
-          width: item.shapeType === 'relationship' || item.shapeType === 'diamond' ? 120 : (item.width || 140), 
-          height: item.shapeType === 'relationship' || item.shapeType === 'diamond' ? 90 : (item.height || 80) 
+        style: {
+          width: item.shapeType === 'relationship' || item.shapeType === 'diamond' ? 120 : (item.width || 140),
+          height: item.shapeType === 'relationship' || item.shapeType === 'diamond' ? 90 : (item.height || 80)
         },
-        data: { 
-          label: item.labelText !== undefined ? item.labelText : item.label, 
+        data: {
+          label: item.labelText !== undefined ? item.labelText : item.label,
           shapeType: item.shapeType,
           fillColor: item.fill || '#ffffff'
         }
@@ -1235,7 +997,7 @@ const getThemeStyles = () => {
 
     if (draggedItemFinal) {
       takeSnapshot();
-      
+
       if (itemType === "connector" || itemCategory === "connector" || draggedItemFinal.isEdge) {
         const ts = Date.now();
         const sourceId = `anchor_${ts}_start`;
@@ -1243,15 +1005,15 @@ const getThemeStyles = () => {
 
         // Flow-space positions: start 80px left, end 80px right of drop point (160px total line)
         const startPoint = { x: position.x - 80, y: position.y };
-        const endPoint   = { x: position.x + 80, y: position.y };
+        const endPoint = { x: position.x + 80, y: position.y };
         // Anchor nodes spread 160px apart so the line body is clearly visible
 
         // Interactive anchor nodes — small handles
-        const anchorStyle = { 
-          width: 8, 
-          height: 8, 
-          background: '#0ea5e9', 
-          border: '2px solid #ffffff', 
+        const anchorStyle = {
+          width: 8,
+          height: 8,
+          background: '#0ea5e9',
+          border: '2px solid #ffffff',
           borderRadius: '50%',
           boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
           padding: 0,
@@ -1279,14 +1041,14 @@ const getThemeStyles = () => {
         };
 
         const strokeDashArray = draggedItemFinal.strokeStyle === 'dashed' ? [5, 5] :
-                                draggedItemFinal.strokeStyle === 'dotted' ? [2, 3] : [];
+          draggedItemFinal.strokeStyle === 'dotted' ? [2, 3] : [];
 
         const newEdge = {
           id: `edge_${ts}`,
           source: sourceId,
           target: targetId,
-          sourceHandle: 'port-1',
-          targetHandle: 'port-3-t',
+          sourceHandle: 'port-center',
+          targetHandle: 'port-center-t',
           type: 'drawio',
           animated: false,
           data: {
@@ -1307,18 +1069,18 @@ const getThemeStyles = () => {
         setNodes((nds) => [...nds, sourceNode, targetNode]);
         setEdges((eds) => [...eds, newEdge]);
       } else {
-         const newNode = {
-           id: `node_${Date.now()}`,
-           type: "flowchart",
-           position,
-           style: { width: draggedItemFinal.width || 140, height: draggedItemFinal.height || 80 },
-           data: { 
-             label: draggedItemFinal.labelText !== undefined ? draggedItemFinal.labelText : draggedItemFinal.label, 
-             shapeType: draggedItemFinal.shapeType,
-             fillColor: draggedItemFinal.fill || '#ffffff'
-           }
-         };
-         setNodes((nds) => [...nds, newNode]);
+        const newNode = {
+          id: `node_${Date.now()}`,
+          type: "flowchart",
+          position,
+          style: { width: draggedItemFinal.width || 140, height: draggedItemFinal.height || 80 },
+          data: {
+            label: draggedItemFinal.labelText !== undefined ? draggedItemFinal.labelText : draggedItemFinal.label,
+            shapeType: draggedItemFinal.shapeType,
+            fillColor: draggedItemFinal.fill || '#ffffff'
+          }
+        };
+        setNodes((nds) => [...nds, newNode]);
       }
       setDraggedItem(null);
     }
@@ -1359,29 +1121,31 @@ const getThemeStyles = () => {
       setDrawingPreviewPoint(null);
       return;
     }
-    
+
     takeSnapshot();
     const lastPoint = drawingPreviewPoint || drawingEdgePoints[drawingEdgePoints.length - 1];
     const snapEnd = getNearestPort(lastPoint);
     const snapStart = getNearestPort(drawingEdgePoints[0]);
 
-    const sourceId = snapStart ? snapStart.id : `anchor_${Date.now()}_start`;
+    const sourceId = snapStart ? snapStart.id : `anchor_${Date.now()}_start_locked`;
     const targetId = snapEnd ? snapEnd.id : `anchor_${Date.now()}_end`;
-    
+
     // Create anchors only if not snapped
     const extraNodes = [];
+    const anchorStyle = { width: 8, height: 8, background: '#0ea5e9', border: '2px solid #ffffff', borderRadius: '50%', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', padding: 0, margin: '-4px 0 0 -4px' };
+    
     if (!snapStart) {
-      extraNodes.push({ id: sourceId, type: "flowchart", position: drawingEdgePoints[0], style: { width: 10, height: 10, opacity: 0.2 }, data: { label: '', shapeType: 'ellipse' }, draggable: true });
+      extraNodes.push({ id: sourceId, type: "anchor", position: drawingEdgePoints[0], style: anchorStyle, data: { isFirstPoint: true }, draggable: false });
     }
     if (!snapEnd) {
-      extraNodes.push({ id: targetId, type: "flowchart", position: lastPoint, style: { width: 10, height: 10, opacity: 0.2 }, data: { label: '', shapeType: 'ellipse' }, draggable: true });
+      extraNodes.push({ id: targetId, type: "anchor", position: lastPoint, style: anchorStyle, data: {}, draggable: true });
     }
 
     // De-duplicate points (remove very close points from double-click artifacts)
     const uniquePoints = [drawingEdgePoints[0]];
     drawingEdgePoints.slice(1).forEach(p => {
       const prev = uniquePoints[uniquePoints.length - 1];
-      const d = Math.sqrt((p.x - prev.x)**2 + (p.y - prev.y)**2);
+      const d = Math.sqrt((p.x - prev.x) ** 2 + (p.y - prev.y) ** 2);
       if (d > 5) uniquePoints.push(p);
     });
 
@@ -1389,8 +1153,8 @@ const getThemeStyles = () => {
       id: `edge_${Date.now()}`,
       source: sourceId,
       target: targetId,
-      sourceHandle: snapStart ? `port-${snapStart.port}` : 'port-0', // Default to port-0 for anchors
-      targetHandle: snapEnd ? `port-${snapEnd.port}-t` : 'port-0-t', // Default to port-0-t for anchors
+      sourceHandle: snapStart ? `port-${snapStart.port}` : 'port-center',
+      targetHandle: snapEnd ? `port-${snapEnd.port}-t` : 'port-center-t',
       type: 'drawio',
       animated: false,
       data: {
@@ -1400,7 +1164,11 @@ const getThemeStyles = () => {
         strokeDash: drawingEdgeState.strokeDash || [],
         markerStart: drawingEdgeState.markerStart && drawingEdgeState.markerStart !== 'none' ? drawingEdgeState.markerStart : 'none',
         markerEnd: drawingEdgeState.markerEnd && drawingEdgeState.markerEnd !== 'none' && drawingEdgeState.markerEnd !== 'arrowOpen' ? drawingEdgeState.markerEnd : 'arrow',
-        waypoints: uniquePoints.slice(1, -1)
+        waypoints: uniquePoints.slice(1, -1),
+        fallbackStartX: drawingEdgePoints[0].x,
+        fallbackStartY: drawingEdgePoints[0].y,
+        fallbackEndX: lastPoint.x,
+        fallbackEndY: lastPoint.y,
       }
     };
 
@@ -1412,7 +1180,7 @@ const getThemeStyles = () => {
 
     // PERSIST TO PAGES ARRAY
     setPages(prev => prev.map((p, idx) => idx === activePageIndex ? { ...p, nodes: finalNodes, edges: finalEdges } : p));
-    
+
     setDrawingEdgeState(null);
     setDrawingEdgePoints([]);
     setDrawingPreviewPoint(null);
@@ -1434,7 +1202,7 @@ const getThemeStyles = () => {
         waypoints: []
       }
     };
-    
+
     setEdges((eds) => {
       const updatedEdges = [...eds, newEdge];
       setPages(prev => prev.map((p, idx) => idx === activePageIndex ? { ...p, edges: updatedEdges } : p));
@@ -1447,7 +1215,7 @@ const getThemeStyles = () => {
       const bounds = reactFlowRef.current?.getBoundingClientRect();
       if (!bounds) return;
       const pos = rfInstance ? rfInstance.screenToFlowPosition({ x: e.clientX, y: e.clientY }) : { x: e.clientX - bounds.left, y: e.clientY - bounds.top };
-      
+
       const snapped = getNearestPort(pos);
       const finalPos = snapped ? { x: snapped.x, y: snapped.y } : pos;
       setDrawingEdgePoints(prev => [...prev, finalPos]);
@@ -1490,11 +1258,11 @@ const getThemeStyles = () => {
           const newNode = { ...selectedNode, id: `node_${Date.now()}`, position: { x: selectedNode.position.x + 20, y: selectedNode.position.y + 20 } };
           setNodes(nds => [...nds, newNode]);
         } else {
-           const selectedEdge = edges.find(e => e.id === selectedData.id);
-           if (selectedEdge) {
-             const newEdge = { ...selectedEdge, id: `edge_${Date.now()}` };
-             setEdges(eds => [...eds, newEdge]);
-           }
+          const selectedEdge = edges.find(e => e.id === selectedData.id);
+          if (selectedEdge) {
+            const newEdge = { ...selectedEdge, id: `edge_${Date.now()}` };
+            setEdges(eds => [...eds, newEdge]);
+          }
         }
       }
       if (e.key === 'Tab') {
@@ -1504,12 +1272,18 @@ const getThemeStyles = () => {
         const currentIdx = allItems.findIndex(i => i.id === selectedData.id);
         const nextIdx = (currentIdx + 1) % allItems.length;
         if (allItems[nextIdx]) {
-           // Set selection logic (mocked here, should trigger onNodeClick/onEdgeClick etc)
+          // Set selection logic (mocked here, should trigger onNodeClick/onEdgeClick etc)
         }
       }
 
-      // Removed redundant Ctrl+S/Ctrl+Shift+S handling to prevent stale closures. 
-      // These are handled in the main keyboard shortcuts useEffect.
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          saveAsJson();
+        } else {
+          saveDiagram();
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -1532,44 +1306,6 @@ const getThemeStyles = () => {
       setModalConfig({ type: 'alert', title: 'Cloud Save Failed', message: 'Could not save to Firebase. Check your connection and Firebase config.' });
     } finally {
       setIsSavingCloud(false);
-    }
-  };
-
-  // ---- SHARING ----
-  const handleShare = async () => {
-    if (!currentUser) {
-      setModalConfig({ 
-        type: 'alert', 
-        title: '🔐 Sign In Required', 
-        message: 'You must sign in with Google to create a public share link. This helps keep our community safe and secure.' 
-      });
-      return;
-    }
-    setIsAiProcessing(true);
-    setAiStatusMessage("Publishing diagram for sharing...");
-    try {
-      const diagram = { 
-        name: diagramName, 
-        nodes, 
-        edges, 
-        themeMode, 
-        customAppearance,
-        creatorId: currentUser.uid,
-        creatorName: currentUser.displayName
-      };
-      const shareId = await shareDiagram(diagram);
-      const shareUrl = `${window.location.origin}${window.location.pathname}?share=${shareId}`;
-      setModalConfig({ 
-        type: 'share', 
-        title: '🔗 Share Your Diagram', 
-        message: 'Anyone with this link can view your diagram. They will not be able to edit your original version.',
-        link: shareUrl 
-      });
-    } catch (err) {
-      console.error("Share error:", err);
-      setModalConfig({ type: 'alert', title: 'Share Failed', message: 'Could not generate share link. This usually happens if your Firebase permissions are not set to allow public shared data.' });
-    } finally {
-      setIsAiProcessing(false);
     }
   };
 
@@ -1600,26 +1336,13 @@ const getThemeStyles = () => {
       try {
         const json = JSON.parse(event.target.result);
         if (json.nodes && json.edges) {
-          // v9.0 Atomic Page Creation for Imports
-          const newPageId = Date.now();
-          const newName = json.name || `Imported Diagram (${pages.length + 1})`;
-          const newPage = { 
-            id: newPageId, 
-            name: newName, 
-            nodes: json.nodes, 
-            edges: json.edges, 
-            past: [], 
-            future: [],
-            themeMode: json.themeMode || 'light',
-            customAppearance: json.customAppearance || { grid: '', shapes: '', format: '' }
-          };
-          
-          setPages(prev => [...prev, newPage]);
-          setActivePageIndex(pages.length); // Switch to the new page
           setNodes(json.nodes);
           setEdges(json.edges);
-          setDiagramName(newName);
-          setModalConfig({ type: 'alert', title: "Import Successful", message: `Diagram "${newName}" successfully imported into a new page.` });
+          if (json.name) {
+            setDiagramName(json.name);
+            setPages(p => p.map((pg, i) => i === activePageIndex ? { ...pg, name: json.name } : pg));
+          }
+          setModalConfig({ type: 'alert', title: "Import Successful", message: "Diagram successfully imported and loaded onto the canvas." });
         }
       } catch (err) {
         setModalConfig({ type: 'alert', title: "Import Failed", message: "Failed to parse local JSON diagram. Ensure the file is valid." });
@@ -1650,7 +1373,7 @@ const getThemeStyles = () => {
           future: []
         };
         setPages(p => [...p, newPage]);
-        setModalConfig({ type: 'alert', title: 'Copy Successful', message: `A clone named '${diagramName} Copy' has been added strictly to your background tabs.`});
+        setModalConfig({ type: 'alert', title: 'Copy Successful', message: `A clone named '${diagramName} Copy' has been added strictly to your background tabs.` });
         closeDrawer();
         break;
       case 'Save':
@@ -1676,9 +1399,9 @@ const getThemeStyles = () => {
         closeDrawer();
         break;
       case 'Export as':
-        setModalConfig({ 
-          type: 'export_options', 
-          title: "Export Diagram As...", 
+        setModalConfig({
+          type: 'export_options',
+          title: "Export Diagram As...",
           message: "Select your preferred file format for the export download."
         });
         closeDrawer();
@@ -1729,28 +1452,112 @@ const getThemeStyles = () => {
         setNodes(nds => nds.filter(n => !n.selected));
         closeDrawer();
         break;
-      case 'Copy':
-        clipboardRef.current = nodes.filter(n => n.selected).map(n => ({ ...n, id: `node_${Date.now()}_${Math.random()}`, position: { x: n.position.x + 20, y: n.position.y + 20 } }));
+      case 'Copy': {
+        const selectedNodes = nodes.filter(n => n.selected);
+        const selectedEdges = edges.filter(e => e.selected);
+        // Also capture edges that connect between selected nodes even if not directly selected
+        const connectedEdges = edges.filter(e => {
+          if (e.selected) return false; // already included
+          return selectedNodes.some(n => n.id === e.source) && selectedNodes.some(n => n.id === e.target);
+        });
+        
+        clipboardRef.current = {
+          nodes: selectedNodes,
+          edges: [...selectedEdges, ...connectedEdges]
+        };
         closeDrawer();
         break;
-      case 'Paste':
-        if (clipboardRef.current.length > 0) {
+      }
+      case 'Paste': {
+        if (clipboardRef.current && clipboardRef.current.nodes) {
           takeSnapshot();
-          const pasted = clipboardRef.current.map(n => ({ ...n, id: `node_${Date.now()}_${Math.random()}`, selected: false }));
-          setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...pasted]);
-          clipboardRef.current = pasted.map(n => ({ ...n, position: { x: n.position.x + 20, y: n.position.y + 20 } }));
+          const { nodes: cNodes, edges: cEdges } = clipboardRef.current;
+          const ts = Date.now();
+          const idMap = {};
+          
+          // 1. Map and paste nodes
+          const pastedNodes = cNodes.map(n => {
+            const newId = `${n.id}_copy_${ts}_${Math.random().toString(36).substr(2, 5)}`;
+            idMap[n.id] = newId;
+            return {
+              ...n,
+              id: newId,
+              position: { x: n.position.x + 40, y: n.position.y + 40 },
+              selected: true
+            };
+          });
+          
+          // 2. Map and paste edges
+          const pastedEdges = cEdges.map(e => {
+            const newId = `edge_${ts}_${Math.random().toString(36).substr(2, 5)}`;
+            // Only paste edge if both source and target nodes exist in the map OR in the current nodes
+            const newSource = idMap[e.source] || e.source;
+            const newTarget = idMap[e.target] || e.target;
+            
+            return {
+              ...e,
+              id: newId,
+              source: newSource,
+              target: newTarget,
+              selected: true
+            };
+          });
+          
+          // Deselect current and select new
+          setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...pastedNodes]);
+          setEdges(eds => [...eds.map(e => ({ ...e, selected: false })), ...pastedEdges]);
+          
+          // Update clipboard for next paste (staggered)
+          clipboardRef.current = {
+            nodes: pastedNodes.map(n => ({ ...n, selected: false })),
+            edges: pastedEdges.map(e => ({ ...e, selected: false }))
+          };
         }
         closeDrawer();
         break;
-      case 'Duplicate':
-        const selected = nodes.filter(n => n.selected);
-        if (selected.length > 0) {
+      }
+      case 'Duplicate': {
+        const selectedNodes = nodes.filter(n => n.selected);
+        const selectedEdges = edges.filter(e => e.selected);
+        // Capture edges between selected nodes
+        const connectedEdges = edges.filter(e => {
+          if (e.selected) return false;
+          return selectedNodes.some(n => n.id === e.source) && selectedNodes.some(n => n.id === e.target);
+        });
+        
+        if (selectedNodes.length > 0) {
           takeSnapshot();
-          const duped = selected.map(n => ({ ...n, id: `node_${Date.now()}_${Math.random()}`, position: { x: n.position.x + 20, y: n.position.y + 20 }, selected: false }));
-          setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...duped]);
+          const ts = Date.now();
+          const idMap = {};
+          
+          const dupedNodes = selectedNodes.map(n => {
+            const newId = `${n.id}_dup_${ts}_${Math.random().toString(36).substr(2, 5)}`;
+            idMap[n.id] = newId;
+            return {
+              ...n,
+              id: newId,
+              position: { x: n.position.x + 40, y: n.position.y + 40 },
+              selected: true
+            };
+          });
+          
+          const dupedEdges = [...selectedEdges, ...connectedEdges].map(e => {
+            const newId = `edge_dup_${ts}_${Math.random().toString(36).substr(2, 5)}`;
+            return {
+              ...e,
+              id: newId,
+              source: idMap[e.source] || e.source,
+              target: idMap[e.target] || e.target,
+              selected: true
+            };
+          });
+          
+          setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...dupedNodes]);
+          setEdges(eds => [...eds.map(e => ({ ...e, selected: false })), ...dupedEdges]);
         }
         closeDrawer();
         break;
+      }
       case 'Select All':
         setNodes(nds => nds.map(n => ({ ...n, selected: true })));
         setEdges(eds => eds.map(e => ({ ...e, selected: true })));
@@ -1915,8 +1722,8 @@ const getThemeStyles = () => {
         }, 400);
         break;
       case 'Fullscreen':
-        if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
-        else document.exitFullscreen().catch(() => {});
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => { });
+        else document.exitFullscreen().catch(() => { });
         closeDrawer();
         break;
       case 'Zoom In': rfInstance?.zoomIn({ duration: 300 }); closeDrawer(); break;
@@ -2027,10 +1834,10 @@ const getThemeStyles = () => {
         closeDrawer();
         break;
       case 'Support...':
-        setModalConfig({ 
-          type: 'alert', 
-          title: '🛠️ Support & Assistance', 
-          message: 'For technical support, feature requests, or bug reports, please contact our development team at support@smartdiagram.io. \n\nOur team typically responds within 24-48 hours.' 
+        setModalConfig({
+          type: 'alert',
+          title: '🛠️ Support & Assistance',
+          message: 'For technical support, feature requests, or bug reports, please contact our development team at support@smartdiagram.io. \n\nOur team typically responds within 24-48 hours.'
         });
         closeDrawer();
         break;
@@ -2039,7 +1846,13 @@ const getThemeStyles = () => {
     }
   };
 
-
+  const handleShare = () => {
+    setModalConfig({
+      type: 'share_panel',
+      title: '📤 Share Diagram',
+      message: 'Choose a software to share your diagram in PNG format.'
+    });
+  };
 
 
 
@@ -2138,15 +1951,15 @@ const getThemeStyles = () => {
       ${!showConnectionPoints ? "hide-connection-points" : ""}
       ${IS_MOBILE ? "mobile-mode" : ""}
     `.trim().replace(/\s+/g, ' ')} style={{
-      '--theme-color': themeColor,
-      ...getThemeStyles(),
-      display: "flex",
-      width: "100vw",
-      height: "100vh",
-      boxSizing: "border-box",
-      fontFamily: "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-      background: 'var(--bg)',
-    }}>
+        '--theme-color': themeColor,
+        ...getThemeStyles(),
+        display: "flex",
+        width: "100vw",
+        height: "100vh",
+        boxSizing: "border-box",
+        fontFamily: "'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+        background: 'var(--bg)',
+      }}>
 
       {/* INNER APP CONTAINER */}
       <div style={{
@@ -2160,8 +1973,8 @@ const getThemeStyles = () => {
           <div style={{ background: 'var(--border)', color: "var(--theme-color)", padding: "8px", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <Frame size={20} />
           </div>
-          
-          <div 
+
+          <div
             onClick={() => setModalConfig({ type: 'alert', title: '✨ Auto-Layout', message: 'Enhance/Smooth layout feature is temporarily unavailable.' })}
             title="Enhance/Smooth Layout"
             style={{ color: "#94a3b8", cursor: "pointer", padding: "8px" }}
@@ -2170,58 +1983,36 @@ const getThemeStyles = () => {
           >
             <Wand2 size={20} />
           </div>
-          
-          <div 
-            onClick={() => setModalConfig({ type: 'ai_prompt', title: 'Generate with AI', message: 'Describe the diagram you want to create.' })}
+
+          <div
+            onClick={() => setModalConfig({ type: 'alert', title: '🤖 AI Text-to-Diagram', message: 'Feature not implemented yet. Our AI engine is undergoing optimization for better performance.' })}
             title="AI Text-to-Diagram"
             style={{ color: "#94a3b8", cursor: "pointer", padding: "8px", position: 'relative' }}
             onMouseOver={e => e.currentTarget.style.color = "var(--theme-color)"}
             onMouseOut={e => e.currentTarget.style.color = "#94a3b8"}
           >
             <FileText size={20} />
-            <Sparkles size={10} style={{ position: 'absolute', top: 4, right: 4, color: "var(--theme-color)" }} />
+            <Sparkles size={10} style={{ position: 'absolute', top: 4, right: 4 }} />
           </div>
-          
-          <div 
-            onClick={() => setModalConfig({ type: 'ai_image', title: 'Image to Diagram', message: 'Upload a sketch or image to convert it into a workspace.' })}
+
+          <div
+            onClick={() => setModalConfig({ type: 'alert', title: '🖼️ AI Image-to-Diagram', message: 'Feature not implemented yet. Our AI engine is undergoing optimization for better performance.' })}
             title="AI Image-to-Diagram"
             style={{ color: "#94a3b8", cursor: "pointer", padding: "8px", position: 'relative' }}
             onMouseOver={e => e.currentTarget.style.color = "var(--theme-color)"}
             onMouseOut={e => e.currentTarget.style.color = "#94a3b8"}
           >
             <Image size={20} />
-            <Sparkles size={10} style={{ position: 'absolute', top: 4, right: 4, color: "var(--theme-color)" }} />
+            <Sparkles size={10} style={{ position: 'absolute', top: 4, right: 4 }} />
           </div>
 
-          <div 
-            onClick={() => {
-              const saved = localStorage.getItem('diagram_history');
-              const history = saved ? JSON.parse(saved) : [];
-              setModalConfig({ type: 'local_history', title: 'Activity History', history });
-            }}
-            title="Activity History"
-            style={{ color: "#94a3b8", cursor: "pointer", padding: "8px" }}
-            onMouseOver={e => e.currentTarget.style.color = "var(--theme-color)"}
-            onMouseOut={e => e.currentTarget.style.color = "#94a3b8"}
-          >
-            <History size={20} />
-          </div>
 
-          <div 
-            onClick={handleShare}
-            title="Share Diagram"
-            style={{ color: "#94a3b8", cursor: "pointer", padding: "8px" }}
-            onMouseOver={e => e.currentTarget.style.color = "var(--theme-color)"}
-            onMouseOut={e => e.currentTarget.style.color = "#94a3b8"}
-          >
-            <Share2 size={20} />
-          </div>
 
           <div style={{ width: '24px', height: '1px', background: 'var(--border)' }} />
 
           <div style={{ flex: 1 }} /> {/* Push bottom icons down */}
 
-          <div 
+          <div
             onClick={() => setModalConfig({ type: 'system_info', title: 'System Details' })}
             title="System Details"
             style={{ color: "#94a3b8", cursor: "pointer", padding: "8px" }}
@@ -2231,7 +2022,7 @@ const getThemeStyles = () => {
             <HelpCircle size={20} />
           </div>
 
-          <div 
+          <div
             onClick={() => setModalConfig({ type: 'feedback', title: 'Send Feedback' })}
             title="Send Feedback"
             style={{ color: "#94a3b8", cursor: "pointer", padding: "8px" }}
@@ -2244,7 +2035,7 @@ const getThemeStyles = () => {
 
         {/* MAIN CONTENT */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", position: 'relative' }}>
-          
+
 
 
           {/* TOP HEADER */}
@@ -2256,45 +2047,43 @@ const getThemeStyles = () => {
                 <FileJson size={14} color="#60a5fa" />
                 <input
                   value={diagramName}
-                  onChange={(e) => {
-                    const newName = e.target.value;
-                    setDiagramName(newName);
-                    setPages(prev => prev.map((p, idx) => idx === activePageIndex ? { ...p, name: newName } : p));
-                  }}
+                  onChange={(e) => setDiagramName(e.target.value)}
                   style={{ background: "transparent", border: "none", outline: "none", fontSize: "14px", fontWeight: "600", color: 'var(--text)', width: "130px" }}
                 />
               </div>
               <div style={{ flex: 1 }} />
-              <div style={{ display: 'flex', gap: '16px' }}>
-                {/* Cloud save button */}
-                <div
-                  onClick={cloudSave}
-                  title={currentUser ? "Save to Cloud" : "Sign in to save"}
-                  style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "6px", background: isSavingCloud ? "#e0f2fe" : "#eff6ff", color: "var(--theme-color)", fontSize: "12px", fontWeight: "600", cursor: "pointer", border: "1px solid #bfdbfe", transition: "all 0.15s" }}
-                  onMouseOver={e => e.currentTarget.style.background = "#dbeafe"}
-                  onMouseOut={e => e.currentTarget.style.background = isSavingCloud ? "#e0f2fe" : "#eff6ff"}
-                >
-                  ☁️ {isSavingCloud ? "Saving…" : cloudDiagramId ? "Saved" : "Save to Cloud"}
-                </div>
-                {/* Google Auth */}
-                {currentUser ? (
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <img src={currentUser.photoURL} alt="avatar" referrerPolicy="no-referrer" style={{ width: 28, height: 28, borderRadius: "50%", border: "2px solid #bfdbfe" }} />
-                    <span style={{ fontSize: "12px", color: 'var(--text)', fontWeight: 600 }}>{currentUser.displayName?.split(' ')[0]}</span>
-                    <span onClick={signOutUser} style={{ fontSize: "11px", color: "#94a3b8", cursor: "pointer", textDecoration: "underline" }}>Sign out</span>
-                  </div>
-                ) : (
+              {false && (
+                <div style={{ display: 'flex', gap: '16px' }}>
+                  {/* Cloud save button */}
                   <div
-                    onClick={signInWithGoogle}
-                    style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "6px", background: 'var(--panel-bg)', border: "1px solid var(--border)", cursor: "pointer", fontSize: "12px", fontWeight: "600", color: 'var(--text)', boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}
-                    onMouseOver={e => e.currentTarget.style.background = "var(--bg)"}
-                    onMouseOut={e => e.currentTarget.style.background = "var(--panel-bg)"}
+                    onClick={cloudSave}
+                    title={currentUser ? "Save to Cloud" : "Sign in to save"}
+                    style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "6px", background: isSavingCloud ? "#e0f2fe" : "#eff6ff", color: "var(--theme-color)", fontSize: "12px", fontWeight: "600", cursor: "pointer", border: "1px solid #bfdbfe", transition: "all 0.15s" }}
+                    onMouseOver={e => e.currentTarget.style.background = "#dbeafe"}
+                    onMouseOut={e => e.currentTarget.style.background = isSavingCloud ? "#e0f2fe" : "#eff6ff"}
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-                    Sign in with Google
+                    ☁️ {isSavingCloud ? "Saving…" : cloudDiagramId ? "Saved" : "Save to Cloud"}
                   </div>
-                )}
-              </div>
+                  {/* Google Auth */}
+                  {currentUser ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <img src={currentUser.photoURL} alt="avatar" referrerPolicy="no-referrer" style={{ width: 28, height: 28, borderRadius: "50%", border: "2px solid #bfdbfe" }} />
+                      <span style={{ fontSize: "12px", color: "#475569", fontWeight: 600 }}>{currentUser.displayName?.split(' ')[0]}</span>
+                      <span onClick={signOutUser} style={{ fontSize: "11px", color: "#94a3b8", cursor: "pointer", textDecoration: "underline" }}>Sign out</span>
+                    </div>
+                  ) : (
+                    <div
+                      onClick={signInWithGoogle}
+                      style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "6px", background: "#ffffff", border: "1px solid #e2e8f0", cursor: "pointer", fontSize: "12px", fontWeight: "600", color: "#0f172a", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}
+                      onMouseOver={e => e.currentTarget.style.background = "#f8fafc"}
+                      onMouseOut={e => e.currentTarget.style.background = "#ffffff"}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" /><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" /><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" /><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" /></svg>
+                      Sign in with Google
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Row 2: Standard Format Toolbar */}
@@ -2303,8 +2092,6 @@ const getThemeStyles = () => {
               <div style={{ display: "flex", gap: "12px", color: "#64748b" }}>
                 <Undo2 size={16} onClick={undo} style={{ cursor: past.length > 0 ? "pointer" : "not-allowed", opacity: past.length > 0 ? 1 : 0.4 }} />
                 <Redo2 size={16} onClick={redo} style={{ cursor: future.length > 0 ? "pointer" : "not-allowed", opacity: future.length > 0 ? 1 : 0.4 }} />
-                <div style={{ width: "1px", height: "16px", background: 'var(--border)', margin: '0 4px' }} />
-                <Trash2 size={16} onClick={() => { takeSnapshot(); setNodes(nds => nds.filter(n => !n.selected)); setEdges(eds => eds.filter(e => !e.selected)); }} style={{ cursor: "pointer", color: "#ef4444" }} title="Delete Selected" />
               </div>
 
               <div style={{ display: "flex", gap: "16px", color: 'var(--text-muted)', alignItems: "center", fontSize: "13px" }}>
@@ -2322,7 +2109,7 @@ const getThemeStyles = () => {
                 <div style={{ cursor: "pointer", background: selectedData.underline ? "#e2e8f0" : "transparent", padding: "2px", borderRadius: "4px" }} onClick={() => updateSelectedNodes({ underline: !selectedData.underline })}><Underline size={16} /></div>
                 <div style={{ cursor: "pointer", padding: "2px", borderRadius: "4px" }} onClick={() => {
                   takeSnapshot();
-                  setNodes((nds) => [...nds, { id: `node_${Date.now()}`, type: "flowchart", position: { x: window.innerWidth/2 - 100, y: window.innerHeight/2 - 100 }, style: { width: 140, height: 40 }, data: { label: "New Text", shapeType: "text" } }]);
+                  setNodes((nds) => [...nds, { id: `node_${Date.now()}`, type: "flowchart", position: { x: window.innerWidth / 2 - 100, y: window.innerHeight / 2 - 100 }, style: { width: 140, height: 40 }, data: { label: "New Text", shapeType: "text" } }]);
                 }}><Type size={16} /></div>
               </div>
 
@@ -2333,7 +2120,7 @@ const getThemeStyles = () => {
               </div>
 
               <div style={{ flex: 1 }} />
-              
+
               {/* Toolbar cleanup: More menu removed */}
 
             </div>
@@ -2356,102 +2143,96 @@ const getThemeStyles = () => {
                   {sidebarCategories.map(cat => ({ ...cat, items: cat.items.filter(item => item.label.toLowerCase().includes(searchQuery.toLowerCase())) }))
                     .filter(cat => cat.items.length > 0)
                     .map((category) => (
-                    <div key={category.title}>
-                      <div onClick={() => toggleCategory(category.title)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0 8px", cursor: "pointer", color: 'var(--text)', fontSize: "13px", fontWeight: "600", userSelect: "none" }}>
-                        {category.title} <ChevronDown size={14} color="#64748b" style={{ transform: openCategories[category.title] ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
-                      </div>
-                      <div style={{ display: openCategories[category.title] ? "grid" : "none", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px", marginTop: "4px", marginBottom: "12px" }}>
-                        {category.items.map((item, idx) => (
-                          <div
-                            key={item.id || `${category.title}-${idx}`}
-                            draggable={true}
-                            onDragStart={(e) => { handleDragStart(e, item); }}
-                            onMouseEnter={(e) => { setHoveredShape({ label: item.label, x: e.clientX, y: e.clientY }); }}
-                            onMouseMove={(e) => { setHoveredShape(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null); }}
-                            onMouseLeave={() => { setHoveredShape(null); }}
-                            onClick={() => handleShapeClick(item)}
-                            className="hover-depth"
-                            style={{
-                              background: "none",
-                              borderRadius: "6px",
-                              height: "44px",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              cursor: "grab",
-                              border: item.isEdge ? "1px solid #e2e8f0" : "none",
-                              padding: "4px",
-                              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
-                            }}
-                          >
-                            <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              {item.isEdge ? (
-                                getConnectorPreviewSvg(item, 'var(--text)')
-                              ) : (
-                                <svg viewBox="0 0 100 100" width="22" height="22">
-                                  {getShapeSvg(item.shapeType, 'var(--text)', "1.5", "transparent")}
-                                </svg>
-                              )}
+                      <div key={category.title}>
+                        <div onClick={() => toggleCategory(category.title)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0 8px", cursor: "pointer", color: "#000000", fontSize: "13px", fontWeight: "600", userSelect: "none" }}>
+                          {category.title} <ChevronDown size={14} color="#64748b" style={{ transform: openCategories[category.title] ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+                        </div>
+                        <div style={{ display: openCategories[category.title] ? "grid" : "none", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px", marginTop: "4px", marginBottom: "12px" }}>
+                          {category.items.map((item, idx) => (
+                            <div
+                              key={item.id || `${category.title}-${idx}`}
+                              draggable={true}
+                              onDragStart={(e) => { handleDragStart(e, item); }}
+                              onMouseEnter={(e) => { setHoveredShape({ label: item.label, x: e.clientX, y: e.clientY }); }}
+                              onMouseMove={(e) => { setHoveredShape(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null); }}
+                              onMouseLeave={() => { setHoveredShape(null); }}
+                              onClick={() => handleShapeClick(item)}
+                              className="hover-depth"
+                              style={{
+                                background: "none",
+                                borderRadius: "6px",
+                                height: "44px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                cursor: "grab",
+                                border: item.isEdge ? "1px solid #e2e8f0" : "none",
+                                padding: "4px",
+                                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                              }}
+                            >
+                              <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                {item.isEdge ? (
+                                  getConnectorPreviewSvg(item, "#000000")
+                                ) : (
+                                  <svg viewBox="0 0 100 100" width="22" height="22">
+                                    {getShapeSvg(item.shapeType, "#000000", "1.5", "transparent")}
+                                  </svg>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               </div>
             )}
 
             {/* ANIMATIONS */}
-      {/* CUSTOM TOOLTIP - viewport-relative positioning */}
-      {hoveredShape && (
-        <div style={{
-          position: 'fixed',
-          left: hoveredShape.x + 12,
-          top: hoveredShape.y + 12,
-          background: '#1e293b',
-          color: '#fff',
-          padding: '6px 10px',
-          borderRadius: '6px',
-          fontSize: '12px',
-          fontWeight: 500,
-          pointerEvents: 'none',
-          zIndex: 99999,
-          whiteSpace: 'nowrap',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
-        }}>
-          {hoveredShape.label}
-        </div>
-      )}
-      {/* CANVAS */}
-              <div 
-                style={{ flex: 1, position: "relative", backgroundColor: "var(--bg)", zIndex: isMainMenuRendered && !isMainMenuClosing ? 1001 : 1, overflow: 'hidden', cursor: formatBrush ? 'crosshair' : 'default' }} 
-                ref={reactFlowRef} 
-                onDragOver={handleDragOver} 
-                onDrop={handleDrop}
-                onMouseMove={(e) => {
-                  if (mouseGlowRef.current) {
-                    const bounds = e.currentTarget.getBoundingClientRect();
-                    mouseGlowRef.current.style.left = (e.clientX - bounds.left) + 'px';
-                    mouseGlowRef.current.style.top = (e.clientY - bounds.top) + 'px';
-                  }
-                }}
-              >
-                {!IS_MOBILE && <div ref={mouseGlowRef} className="canvas-mouse-glow" style={{ left: 0, top: 0 }} />}
-                {isAiProcessing && (
-                  <div style={{
-                    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, 
-                    backgroundColor: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(4px)',
-                    zIndex: 2000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                    pointerEvents: 'all'
-                  }}>
-                    <div className="anim-pulse" style={{ padding: '24px', background: '#ffffff', borderRadius: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-                      <div style={{ width: '40px', height: '40px', border: '4px solid #f3f3f3', borderTop: '4px solid #3b82f6', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-                      <div style={{ fontWeight: '600', color: '#1e293b' }}>AI is structuring your diagram...</div>
-                      <div style={{ fontSize: '12px', color: '#64748b' }}>Calculating optimal grid positions</div>
-                    </div>
-                  </div>
-                )}
+            {/* CUSTOM TOOLTIP - viewport-relative positioning */}
+            {hoveredShape && (
+              <div style={{
+                position: 'fixed',
+                left: hoveredShape.x + 12,
+                top: hoveredShape.y + 12,
+                background: '#1e293b',
+                color: '#fff',
+                padding: '6px 10px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 500,
+                pointerEvents: 'none',
+                zIndex: 99999,
+                whiteSpace: 'nowrap',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+              }}>
+                {hoveredShape.label}
+              </div>
+            )}
+            {/* CANVAS */}
+            <div
+              style={{ 
+                flex: 1, 
+                position: "relative", 
+                backgroundColor: "#f1f5f9", 
+                zIndex: isMainMenuRendered && !isMainMenuClosing ? 1001 : 1, 
+                overflow: 'hidden', 
+                cursor: formatBrush ? 'copy' : 'default' 
+              }}
+              ref={reactFlowRef}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              onMouseMove={(e) => {
+                if (mouseGlowRef.current) {
+                  const bounds = e.currentTarget.getBoundingClientRect();
+                  mouseGlowRef.current.style.left = (e.clientX - bounds.left) + 'px';
+                  mouseGlowRef.current.style.top = (e.clientY - bounds.top) + 'px';
+                }
+              }}
+            >
+              {!IS_MOBILE && <div ref={mouseGlowRef} className="canvas-mouse-glow" style={{ left: 0, top: 0 }} />}
+
 
 
               {/* RULERS */}
@@ -2471,7 +2252,7 @@ const getThemeStyles = () => {
               )}
 
               {/* FLOATING FORMAT BAR */}
-              {(hasSelectedNode || hasSelectedEdge) && (
+              {hasSelectedNode && (
                 <div style={{
                   position: "absolute",
                   top: "24px",
@@ -2487,131 +2268,127 @@ const getThemeStyles = () => {
                   zIndex: 10,
                   border: formatBrush ? "2px solid #3b82f6" : "1px solid #e2e8f0"
                 }}>
-                  {!hasSelectedEdge && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                      <div style={{ display: "flex", gap: "12px", border: "1px solid #e2e8f0", padding: "4px 8px", borderRadius: "6px", color: "#000000", fontSize: "14px", alignItems: "center", height: "30px" }}>
-                        <select 
-                          value={activeData.fontFamily || ""} 
-                          onChange={(e) => updateSelectedNodes({ fontFamily: e.target.value })}
-                          style={{ border: "none", outline: "none", background: "transparent", width: "70px", cursor: "pointer" }}
-                        >
-                          <option value="">Arial</option>
-                          <option value="'Courier New', Courier, monospace">Courier</option>
-                          <option value="'Times New Roman', Times, serif">Times</option>
-                          <option value="'Inter', sans-serif">Inter</option>
-                        </select>
-                        <div style={{ width: "1px", height: "16px", background: "#e2e8f0" }} />
-                        <select 
-                          value={activeData.fontSize || 13} 
-                          onChange={(e) => updateSelectedNodes({ fontSize: Number(e.target.value) })}
-                          style={{ border: "none", outline: "none", background: "transparent", width: "45px", cursor: "pointer" }}
-                        >
-                          {[10, 11, 12, 13, 14, 16, 18, 20, 24, 32].map(size => (
-                            <option key={size} value={size}>{size}</option>
-                          ))}
-                        </select>
-                        <div style={{ width: "1px", height: "16px", background: "#e2e8f0" }} />
-                        <input 
-                          type="text" 
-                          value={activeData.label || ""} 
-                          onChange={(e) => updateSelectedNodes({ label: e.target.value })}
-                          placeholder="Label"
-                          style={{ border: "none", outline: "none", background: "transparent", fontSize: "13px", fontWeight: "600", color: "#0f172a", width: "100px" }}
-                        />
-                      </div>
-                      
-                      <div style={{ display: "flex", gap: "16px", color: "#334155", paddingLeft: "4px", alignItems: "center" }}>
-                        <div title="Bold" style={{ cursor: "pointer", background: activeData.bold ? "#e2e8f0" : "transparent", padding: "2px", borderRadius: "4px" }} onClick={() => updateSelectedNodes({ bold: !activeData.bold })}><Bold size={16} /></div>
-                        <div title="Italic" style={{ cursor: "pointer", background: activeData.italic ? "#e2e8f0" : "transparent", padding: "2px", borderRadius: "4px" }} onClick={() => updateSelectedNodes({ italic: !activeData.italic })}><Italic size={16} /></div>
-                        {/* Underline — solid line, marks Primary Key in ER diagrams */}
-                        <div
-                          title="Underline (Primary Key)"
-                          onClick={() => updateSelectedNodes({ underline: !activeData.underline, dottedUnderline: false })}
-                          style={{
-                            cursor: "pointer",
-                            padding: "2px 3px",
-                            borderRadius: "4px",
-                            background: activeData.underline ? "#e2e8f0" : "transparent",
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "center",
-                            gap: "1px",
-                            lineHeight: 1,
-                          }}
-                        >
-                          <span style={{ fontWeight: "bold", fontSize: "14px", fontStyle: "normal", textDecoration: "none" }}>U</span>
-                          <div style={{ height: "2px", width: "12px", background: "#334155", borderRadius: "1px" }} />
-                        </div>
-                        {/* Dotted Underline — marks Foreign Key in ER diagrams */}
-                        <div
-                          title="Dotted Underline (Foreign Key)"
-                          onClick={() => updateSelectedNodes({ dottedUnderline: !activeData.dottedUnderline, underline: false })}
-                          style={{
-                            cursor: "pointer",
-                            padding: "2px 3px",
-                            borderRadius: "4px",
-                            background: activeData.dottedUnderline ? "#e2e8f0" : "transparent",
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "center",
-                            gap: "1px",
-                            lineHeight: 1,
-                          }}
-                        >
-                          <span style={{ fontWeight: "bold", fontSize: "14px", fontStyle: "normal", textDecoration: "none" }}>U</span>
-                          <div style={{ height: "2px", width: "12px", backgroundImage: "radial-gradient(circle, #334155 1px, transparent 1px)", backgroundSize: "4px 2px", backgroundRepeat: "repeat-x" }} />
-                        </div>
-                        <div style={{ cursor: "pointer", padding: "2px", borderRadius: "4px" }} onClick={() => {
-                          const nextAlign = activeData.textAlign === "left" ? "center" : (activeData.textAlign === "center" ? "right" : "left");
-                          updateSelectedNodes({ textAlign: nextAlign });
-                        }}>
-                          {(!activeData.textAlign || activeData.textAlign === "center") && <AlignCenter size={16} />}
-                          {activeData.textAlign === "left" && <AlignLeft size={16} />}
-                          {activeData.textAlign === "right" && <AlignRight size={16} />}
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", position: "relative", cursor: "pointer", padding: "2px", borderRadius: "4px" }}>
-                           <span style={{ fontWeight: "bold", fontSize: "16px", lineHeight: "1", color: activeData.color || "#000000" }}>A</span>
-                           <input type="color" value={activeData.color || "#000000"} onChange={(e) => updateSelectedNodes({ color: e.target.value })} style={{ position: "absolute", opacity: 0, width: "100%", height: "100%", cursor: "pointer" }} />
-                           <div style={{ position: "absolute", bottom: -2, height: 3, width: "100%", background: activeData.color || "#000000" }} />
-                        </div>
-                      </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center", background: "#f8fafc", padding: "6px 12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                      <Type size={16} color="#64748b" />
+                      <input 
+                        type="text" 
+                        value={selectedData.label || ""} 
+                        onChange={(e) => updateSelectedNodes({ label: e.target.value })}
+                        placeholder="Shape Text"
+                        style={{ border: "none", outline: "none", background: "transparent", fontSize: "14px", color: "#0f172a", width: "160px", fontWeight: "500" }}
+                      />
                     </div>
-                  )}
-
-                  {!hasSelectedEdge && <div style={{ width: "1px", height: "40px", background: "#e2e8f0" }} />}
-
-                  <div style={{ display: "flex", gap: "24px", color: "#334155" }}>
-                    {!hasSelectedEdge && (
-                      <>
-                        <div onClick={handleFormatBrushClick} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", background: formatBrush ? "#e2e8f0" : "transparent", padding: "4px", borderRadius: "6px" }}>
-                          <PaintBucket size={20} color={formatBrush ? "var(--theme-color)" : "currentColor"} />
-                          <span style={{ fontSize: "11px", fontWeight: "600" }}>Format Painter</span>
-                        </div>
-                        <div onClick={applyQuickStyle} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", padding: "4px", borderRadius: "6px" }}>
-                          <Wand2 size={20} />
-                          <span style={{ fontSize: "11px", fontWeight: "600" }}>Style</span>
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", position: "relative", padding: "4px", borderRadius: "6px" }}>
-                          <div style={{ width: 18, height: 18, background: activeData.fillColor || "#ffffff", border: "2px solid #334155", borderRadius: 2 }} />
-                          <input type="color" value={activeData.fillColor || "#ffffff"} onChange={(e) => updateSelectedNodes({ fillColor: e.target.value })} style={{ position: "absolute", top: 0, opacity: 0, width: 24, height: 24, cursor: "pointer" }} />
-                          <span style={{ fontSize: "11px", fontWeight: "600" }}>Fill</span>
-                        </div>
-                      </>
-                    )}
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", position: "relative", padding: "4px", borderRadius: "6px" }}>
-                      <div style={{ width: 18, height: 18, background: "transparent", border: `3px solid ${activeData.strokeColor || "#60a5fa"}`, borderRadius: 2 }} />
-                      <input type="color" value={activeData.strokeColor || "#60a5fa"} onChange={(e) => { if(hasSelectedNode) updateSelectedNodes({ strokeColor: e.target.value }); else setEdges(eds => eds.map(edge => edge.selected ? { ...edge, data: { ...edge.data, stroke: e.target.value } } : edge)); }} style={{ position: "absolute", top: 0, opacity: 0, width: 24, height: 24, cursor: "pointer" }} />
-                      <span style={{ fontSize: "11px", fontWeight: "600" }}>{hasSelectedEdge ? "Color" : "Outline"}</span>
+                    <div style={{ display: "flex", gap: "12px", border: "1px solid #e2e8f0", padding: "4px 8px", borderRadius: "6px", color: "#000000", fontSize: "14px", alignItems: "center", height: "30px" }}>
+                      <select
+                        value={selectedData.fontFamily || ""}
+                        onChange={(e) => updateSelectedNodes({ fontFamily: e.target.value })}
+                        style={{ border: "none", outline: "none", background: "transparent", width: "70px", cursor: "pointer" }}
+                      >
+                        <option value="">Arial</option>
+                        <option value="'Courier New', Courier, monospace">Courier</option>
+                        <option value="'Times New Roman', Times, serif">Times</option>
+                        <option value="'Inter', sans-serif">Inter</option>
+                      </select>
+                      <div style={{ width: "1px", height: "16px", background: "#e2e8f0" }} />
+                      <select
+                        value={selectedData.fontSize || 13}
+                        onChange={(e) => updateSelectedNodes({ fontSize: Number(e.target.value) })}
+                        style={{ border: "none", outline: "none", background: "transparent", width: "45px", cursor: "pointer" }}
+                      >
+                        {[10, 11, 12, 13, 14, 16, 18, 20, 24, 32].map(size => (
+                          <option key={size} value={size}>{size}</option>
+                        ))}
+                      </select>
                     </div>
-                    <div onClick={() => { takeSnapshot(); setNodes(nds => nds.filter(n => !n.selected)); setEdges(eds => eds.filter(e => !e.selected)); }} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", color: "#ef4444", padding: "4px", borderRadius: "6px" }}>
-                      <Trash2 size={20} />
-                      <span style={{ fontSize: "11px", fontWeight: "600" }}>Delete</span>
+
+                    <div style={{ display: "flex", gap: "16px", color: "#334155", paddingLeft: "4px", alignItems: "center" }}>
+                      <div title="Bold" style={{ cursor: "pointer", background: selectedData.bold ? "#e2e8f0" : "transparent", padding: "2px", borderRadius: "4px" }} onClick={() => updateSelectedNodes({ bold: !selectedData.bold })}><Bold size={16} /></div>
+                      <div title="Italic" style={{ cursor: "pointer", background: selectedData.italic ? "#e2e8f0" : "transparent", padding: "2px", borderRadius: "4px" }} onClick={() => updateSelectedNodes({ italic: !selectedData.italic })}><Italic size={16} /></div>
+                      {/* Underline — solid line, marks Primary Key in ER diagrams */}
+                      <div
+                        title="Underline (Primary Key)"
+                        onClick={() => updateSelectedNodes({ underline: !selectedData.underline, dottedUnderline: false })}
+                        style={{
+                          cursor: "pointer",
+                          padding: "2px 3px",
+                          borderRadius: "4px",
+                          background: selectedData.underline ? "#e2e8f0" : "transparent",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: "1px",
+                          lineHeight: 1,
+                        }}
+                      >
+                        <span style={{ fontWeight: "bold", fontSize: "14px", fontStyle: "normal", textDecoration: "none" }}>U</span>
+                        <div style={{ height: "2px", width: "12px", background: "#334155", borderRadius: "1px" }} />
+                      </div>
+                      {/* Dotted Underline — marks Foreign Key in ER diagrams */}
+                      <div
+                        title="Dotted Underline (Foreign Key)"
+                        onClick={() => updateSelectedNodes({ dottedUnderline: !selectedData.dottedUnderline, underline: false })}
+                        style={{
+                          cursor: "pointer",
+                          padding: "2px 3px",
+                          borderRadius: "4px",
+                          background: selectedData.dottedUnderline ? "#e2e8f0" : "transparent",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: "1px",
+                          lineHeight: 1,
+                        }}
+                      >
+                        <span style={{ fontWeight: "bold", fontSize: "14px", fontStyle: "normal", textDecoration: "none" }}>U</span>
+                        <div style={{ height: "2px", width: "12px", backgroundImage: "radial-gradient(circle, #334155 1px, transparent 1px)", backgroundSize: "4px 2px", backgroundRepeat: "repeat-x" }} />
+                      </div>
+                      <div style={{ cursor: "pointer", padding: "2px", borderRadius: "4px" }} onClick={() => {
+                        const nextAlign = selectedData.textAlign === "left" ? "center" : (selectedData.textAlign === "center" ? "right" : "left");
+                        updateSelectedNodes({ textAlign: nextAlign });
+                      }}>
+                        {(!selectedData.textAlign || selectedData.textAlign === "center") && <AlignCenter size={16} />}
+                        {selectedData.textAlign === "left" && <AlignLeft size={16} />}
+                        {selectedData.textAlign === "right" && <AlignRight size={16} />}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", position: "relative", cursor: "pointer", padding: "2px", borderRadius: "4px" }}>
+                        <span style={{ fontWeight: "bold", fontSize: "16px", lineHeight: "1", color: selectedData.color || "#000000" }}>A</span>
+                        <input type="color" value={selectedData.color || "#000000"} onChange={(e) => updateSelectedNodes({ color: e.target.value })} style={{ position: "absolute", opacity: 0, width: "100%", height: "100%", cursor: "pointer" }} />
+                        <div style={{ position: "absolute", bottom: -2, height: 3, width: "100%", background: selectedData.color || "#000000" }} />
+                      </div>
                     </div>
                   </div>
 
-                 </div>
-               )}
-              
+                  <div style={{ width: "1px", height: "40px", background: "#e2e8f0" }} />
+
+                  <div style={{ display: "flex", gap: "24px", color: "#334155" }}>
+                    <div onClick={handleFormatBrushClick} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", background: formatBrush ? "#e2e8f0" : "transparent", padding: "4px", borderRadius: "6px" }}>
+                      <PaintBucket size={20} color={formatBrush ? "var(--theme-color)" : "currentColor"} />
+                      <span style={{ fontSize: "11px", fontWeight: "600" }}>Format Painter</span>
+                    </div>
+                    <div onClick={applyQuickStyle} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", padding: "4px", borderRadius: "6px" }}>
+                      <Wand2 size={20} />
+                      <span style={{ fontSize: "11px", fontWeight: "600" }}>Style</span>
+                    </div>
+                    <div onClick={() => handleEditMenu('Delete')} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", padding: "4px", borderRadius: "6px", color: "#ef4444" }}>
+                      <Trash2 size={20} />
+                      <span style={{ fontSize: "11px", fontWeight: "600" }}>Delete</span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", position: "relative", padding: "4px", borderRadius: "6px" }}>
+                      <div style={{ width: 18, height: 18, background: selectedData.fillColor || "#ffffff", border: "2px solid #334155", borderRadius: 2 }} />
+                      <input type="color" value={selectedData.fillColor || "#ffffff"} onChange={(e) => updateSelectedNodes({ fillColor: e.target.value })} style={{ position: "absolute", top: 0, opacity: 0, width: 24, height: 24, cursor: "pointer" }} />
+                      <span style={{ fontSize: "11px", fontWeight: "600" }}>Fill</span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer", position: "relative", padding: "4px", borderRadius: "6px" }}>
+                      <div style={{ width: 18, height: 18, background: "transparent", border: `3px solid ${selectedData.strokeColor || "#60a5fa"}`, borderRadius: 2 }} />
+                      <input type="color" value={selectedData.strokeColor || "#60a5fa"} onChange={(e) => updateSelectedNodes({ strokeColor: e.target.value })} style={{ position: "absolute", top: 0, opacity: 0, width: 24, height: 24, cursor: "pointer" }} />
+                      <span style={{ fontSize: "11px", fontWeight: "600" }}>Outline</span>
+                    </div>
+                  </div>
+
+                </div>
+              )}
+
               <ReactFlow
                 nodes={displayNodes}
                 edges={displayEdges}
@@ -2630,7 +2407,7 @@ const getThemeStyles = () => {
                 }}
                 onPaneClick={handlePaneClick}
                 onPaneMouseMove={handlePaneMouseMove}
-                 onDoubleClick={() => { if (drawingEdgeState) finishDrawingEdge(); }}
+                onDoubleClick={() => { if (drawingEdgeState) finishDrawingEdge(); }}
                 onNodeDragStart={(evt, node) => {
                   // If dragging an anchor, deselect other nodes/edges to move independently
                   if (node.type === 'anchor') {
@@ -2649,7 +2426,7 @@ const getThemeStyles = () => {
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
                 onInit={setRfInstance}
-                defaultEdgeOptions={{ 
+                defaultEdgeOptions={{
                   type: 'smoothstep',
                   data: {
                     routing: 'smooth',
@@ -2672,7 +2449,7 @@ const getThemeStyles = () => {
                 panOnDrag={[1, 2]}
               >
                 {showGrid && <Background color={gridColor} variant="lines" gap={gridSize} size={1} />}
-                
+
                 {/* SVG Marker Definitions for Draw.io style edges - Inside ReactFlow for reliable export */}
                 <svg style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' }}>
                   <defs>
@@ -2735,12 +2512,12 @@ const getThemeStyles = () => {
                     </marker>
                   </defs>
                 </svg>
-                
+
                 {/* DRAWING TOOLTIP — removed (pixel coords hidden per user request) */}
 
                 {/* SNAPPED PORT HIGHLIGHT */}
                 {snappedPort && (
-                   <div style={{ position: 'absolute', left: rfInstance?.flowToScreenPosition({ x: snappedPort.x, y: snappedPort.y }).x - 10, top: rfInstance?.flowToScreenPosition({ x: snappedPort.x, y: snappedPort.y }).y - 10, width: 20, height: 20, borderRadius: '50%', border: '4px solid #10b981', pointerEvents: 'none', zIndex: 10001, animation: 'pulse 1s infinite' }} />
+                  <div style={{ position: 'absolute', left: rfInstance?.flowToScreenPosition({ x: snappedPort.x, y: snappedPort.y }).x - 10, top: rfInstance?.flowToScreenPosition({ x: snappedPort.x, y: snappedPort.y }).y - 10, width: 20, height: 20, borderRadius: '50%', border: '4px solid #10b981', pointerEvents: 'none', zIndex: 10001, animation: 'pulse 1s infinite' }} />
                 )}
 
                 <Controls showInteractive={false} style={{ bottom: 72, right: 20, border: "none", boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)", borderRadius: "8px" }} />
@@ -2758,7 +2535,8 @@ const getThemeStyles = () => {
                   >
                     <span>{activePageIndex === idx ? diagramName : p.name}</span>
                     <span
-                      onClick={(e) => { e.stopPropagation(); 
+                      onClick={(e) => {
+                        e.stopPropagation();
                         // Delete THIS specific page (by index), not always active
                         const { pages: cPages, activePageIndex: cIndex, nodes: cNodes, edges: cEdges, past: cPast, future: cFuture, diagramName: cName } = currentStateRef.current;
                         if (cPages.length <= 1) { triggerErrorShake(); setModalConfig({ type: 'alert', title: 'Action Restricted', message: 'You cannot delete the only remaining page.' }); return; }
@@ -2793,10 +2571,10 @@ const getThemeStyles = () => {
       {/* MAIN MENU & BLUR BACKDROP */}
       {isMainMenuRendered && (
         <>
-          <div 
-             style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.2)', backdropFilter: 'blur(10px)', zIndex: 5000 }}
-             onClick={closeDrawer}
-             className={isMainMenuClosing ? "anim-modal-backdrop-out" : "anim-modal-backdrop"}
+          <div
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.1)', backdropFilter: 'blur(5px)', zIndex: 1000 }}
+            onClick={closeDrawer}
+            className={isMainMenuClosing ? "anim-modal-backdrop-out" : "anim-modal-backdrop"}
           />
           <style>{`
             .anim-modal-backdrop-out {
@@ -2825,6 +2603,10 @@ const getThemeStyles = () => {
               transition: opacity 0.2s ease;
             }
 
+            .react-flow__node {
+              cursor: ${formatBrush ? 'copy' : 'grab'} !important;
+            }
+
             .anim-node-entrance {
               animation: nodePop 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
             }
@@ -2835,35 +2617,35 @@ const getThemeStyles = () => {
               -webkit-text-fill-color: transparent;
             }
           `}</style>
-          <div className={isMainMenuClosing ? "anim-drawer-out" : "anim-drawer"} style={{ position: 'fixed', top: 0, left: 0, width: '316px', height: '100%', backgroundColor: '#f4f6f9', zIndex: 5001, padding: '24px 0', display: 'flex', flexDirection: 'column', boxShadow: '4px 0 20px rgba(0,0,0,0.1)', overflowY: 'auto', overflowX: 'hidden', boxSizing: 'border-box' }}>
-            <div className="anim-gradient-text" style={{ padding: '0 24px', marginBottom: '32px', fontSize: '22px', fontWeight: '800', flexShrink: 0 }}>Smart Diagram Studio</div>
+          <div className={isMainMenuClosing ? "anim-drawer-out" : "anim-drawer"} style={{ position: 'fixed', top: 0, left: 0, width: '316px', height: '100%', backgroundColor: '#f4f6f9', zIndex: 1002, padding: '24px 0', display: 'flex', flexDirection: 'column', boxShadow: '4px 0 20px rgba(0,0,0,0.1)', overflowY: 'auto', overflowX: 'hidden', boxSizing: 'border-box' }}>
+            <div className="anim-gradient-text" style={{ padding: '0 24px', marginBottom: '32px', fontSize: '22px', fontWeight: '800', flexShrink: 0 }}>Smart Diagram</div>
             <div style={{ flex: 1 }}>
               {['File', 'Edit', 'View', 'Extras', 'Help'].map((item, i) => (
-                <div key={item} className={isMainMenuClosing ? "" : `stagger-${i+1}`} style={{ display: 'flex', flexDirection: 'column' }}>
+                <div key={item} className={isMainMenuClosing ? "" : `stagger-${i + 1}`} style={{ display: 'flex', flexDirection: 'column' }}>
                   <div onClick={() => toggleMenuSection(item)} style={{ padding: '14px 24px', color: '#475569', cursor: 'pointer', fontSize: '15px', fontWeight: '500', transition: 'background-color 0.2s, color 0.2s', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#e2e8f0'; e.currentTarget.style.color = '#0f172a'; }} onMouseOut={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#475569'; }}>
                     {item}
-                    {menuSections[item] && <ChevronDown size={16} style={{ transform: openMenuSection === item ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>}
+                    {menuSections[item] && <ChevronDown size={16} style={{ transform: openMenuSection === item ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />}
                   </div>
                   {(openMenuSection === item || closingMenuSection === item) && (
                     <div className={closingMenuSection === item ? "anim-dropdown-out" : "anim-dropdown-in"} style={{ padding: '8px 0', backgroundColor: '#ffffff', borderTop: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }}>
                       {menuSections[item].map((fi, idx) => fi.type === 'divider' ? (
                         <div key={idx} style={{ height: '1px', background: '#e2e8f0', margin: '6px 0' }} />
                       ) : (
-                          <div key={idx} onClick={() => { if(!fi.isDisabled) { if (item === 'File') handleFileMenu(fi.label); else if (item === 'Edit') handleEditMenu(fi.label); else if (item === 'View') handleViewMenu(fi.label); else if (item === 'Extras') handleExtrasMenu(fi.label); else if (item === 'Help') handleHelpMenu(fi.label); } }} style={{ padding: '10px 24px', fontSize: '13px', color: fi.isDisabled ? '#cbd5e1' : '#475569', cursor: fi.isDisabled ? 'default' : 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onMouseOver={(e) => { if(!fi.isDisabled){e.currentTarget.style.backgroundColor = '#f8fafc'; e.currentTarget.style.color = '#0f172a';} }} onMouseOut={(e) => { if(!fi.isDisabled){e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#475569';} }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <div style={{ width: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                {fi.hasCheck && fi.isActive && <Check size={14} color="#0f172a" />}
-                              </div>
-                              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                {fi.label}
-                                {fi.hasHelpIcon && <HelpCircle size={12} color="#94a3b8" />}
-                              </span>
+                        <div key={idx} onClick={() => { if (!fi.isDisabled) { if (item === 'File') handleFileMenu(fi.label); else if (item === 'Edit') handleEditMenu(fi.label); else if (item === 'View') handleViewMenu(fi.label); else if (item === 'Extras') handleExtrasMenu(fi.label); else if (item === 'Help') handleHelpMenu(fi.label); } }} style={{ padding: '10px 24px', fontSize: '13px', color: fi.isDisabled ? '#cbd5e1' : '#475569', cursor: fi.isDisabled ? 'default' : 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onMouseOver={(e) => { if (!fi.isDisabled) { e.currentTarget.style.backgroundColor = '#f8fafc'; e.currentTarget.style.color = '#0f172a'; } }} onMouseOut={(e) => { if (!fi.isDisabled) { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#475569'; } }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ width: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              {fi.hasCheck && fi.isActive && <Check size={14} color="#0f172a" />}
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                               {fi.shortcut && <span style={{ color: '#94a3b8', fontSize: '12px' }}>{fi.shortcut}</span>}
-                               {fi.hasArrow && <span style={{ color: fi.isDisabled ? '#cbd5e1' : '#94a3b8', fontSize: '10px' }}>▶</span>}
-                            </div>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {fi.label}
+                              {fi.hasHelpIcon && <HelpCircle size={12} color="#94a3b8" />}
+                            </span>
                           </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {fi.shortcut && <span style={{ color: '#94a3b8', fontSize: '12px' }}>{fi.shortcut}</span>}
+                            {fi.hasArrow && <span style={{ color: fi.isDisabled ? '#cbd5e1' : '#94a3b8', fontSize: '10px' }}>▶</span>}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   )}
@@ -2876,24 +2658,24 @@ const getThemeStyles = () => {
 
       {/* GLASS MODAL LAYER */}
       {modalConfig && (
-        <div 
-          className={isModalClosing ? "anim-modal-backdrop-out" : "anim-modal-backdrop"} 
+        <div
+          className={isModalClosing ? "anim-modal-backdrop-out" : "anim-modal-backdrop"}
           onClick={closeModal}
           style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, backgroundColor: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(20px)' }}
         >
-          <div 
-            className={`anim-modal-card ${isModalClosing ? "anim-modal-out" : ""} ${(modalConfig.type === 'ai_image' || modalConfig.type === 'ai_prompt') ? 'rgb-border' : ''}`}
+          <div
+            className={`anim-modal-card ${isModalClosing ? "anim-modal-out" : ""}`}
             onClick={(e) => e.stopPropagation()}
-            style={{ 
-              background: 'rgba(255, 255, 255, 0.95)', 
-              backdropFilter: 'blur(16px)', 
-              padding: '24px', 
-              borderRadius: '16px', 
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', 
-              border: (modalConfig.type === 'ai_image' || modalConfig.type === 'ai_prompt') ? 'none' : '1px solid #e2e8f0', 
-              maxWidth: modalConfig.type === 'page_setup' ? '320px' : ((modalConfig.type === 'ai_image' || modalConfig.type === 'ai_prompt') ? '600px' : '400px'), 
-              width: '100%', 
-              textAlign: 'center' 
+            style={{
+              background: 'rgba(255, 255, 255, 0.95)',
+              backdropFilter: 'blur(16px)',
+              padding: '24px',
+              borderRadius: '16px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              border: '1px solid #e2e8f0',
+              maxWidth: modalConfig.type === 'page_setup' ? '320px' : '400px',
+              width: '100%',
+              textAlign: 'center'
             }}
           >
             <h2 style={{ margin: '0 0 8px 0', fontSize: '18px', color: '#0f172a' }}>{modalConfig.title}</h2>
@@ -2926,78 +2708,59 @@ const getThemeStyles = () => {
                 )}
                 <button className="anim-hover-bounce" onClick={() => setModalConfig(null)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', background: 'transparent', color: '#475569', fontWeight: '600', cursor: 'pointer' }}>Close</button>
               </div>
-            ) : modalConfig.type === 'local_history' ? (
-              <div style={{ textAlign: 'left' }}>
-                {modalConfig.history?.length === 0 ? (
-                  <p style={{ color: '#94a3b8', textAlign: 'center', marginBottom: '16px' }}>No activity history found.</p>
-                ) : (
-                  <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-                    {modalConfig.history.map((h, i) => (
-                      <div key={h.id} onClick={() => openFromHistory(h)} style={{ padding: '12px', borderRadius: '10px', border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', transition: 'all 0.15s', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onMouseOver={e => e.currentTarget.style.background = '#eff6ff'} onMouseOut={e => e.currentTarget.style.background = '#f8fafc'}>
-                        <div>
-                          <div style={{ fontWeight: '600', fontSize: '13px', color: '#0f172a' }}>{h.name}</div>
-                          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>{h.timestamp} · {h.nodes?.length || 0} items</div>
-                        </div>
-                        <History size={14} color="#94a3b8" />
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <button className="anim-hover-bounce" onClick={() => setModalConfig(null)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', background: 'transparent', color: '#475569', fontWeight: '600', cursor: 'pointer' }}>Close</button>
-              </div>
             ) : modalConfig.type === 'edit_style' ? (
               <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {modalConfig.isEdge ? (
-                   <>
-                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>Routing</label>
-                        <select defaultValue={modalConfig.routing || 'sharp'} onChange={e => { takeSnapshot(); setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, routing: e.target.value } } : edge)); }} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px', flex: 1 }}>
-                          <option value="sharp">Sharp</option>
-                          <option value="rounded">Rounded</option>
-                          <option value="curved">Curved</option>
-                        </select>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>Stroke Color</label>
-                        <input type="color" defaultValue={modalConfig.strokeColor} onChange={e => { setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, stroke: e.target.value } } : edge)); }} style={{ width: '40px', height: '32px', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer' }} />
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>Line Pattern</label>
-                        <select defaultValue={modalConfig.strokeDash?.join(',') || ''} onChange={e => { const val = e.target.value; setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, strokeDash: val ? val.split(',').map(Number) : [] } } : edge)); }} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px', flex: 1 }}>
-                          <option value="">Solid</option>
-                          <option value="6,6">Dashed</option>
-                          <option value="2,4">Dotted</option>
-                        </select>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>Start Arrow</label>
-                        <select defaultValue={modalConfig.markerStart || 'none'} onChange={e => { setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, markerStart: e.target.value } } : edge)); }} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px', flex: 1 }}>
-                          <option value="none">None</option>
-                          <option value="open">Open Arrow</option>
-                          <option value="arrow">Standard Arrow</option>
-                          <option value="filled">Solid Arrow</option>
-                          <option value="hollow">Hollow Arrow</option>
-                          <option value="diamond">Diamond</option>
-                          <option value="diamond_filled">Solid Diamond</option>
-                          <option value="circle">Circle</option>
-                          <option value="circle_filled">Solid Circle</option>
-                        </select>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>End Arrow</label>
-                        <select defaultValue={modalConfig.markerEnd || 'none'} onChange={e => { setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, markerEnd: e.target.value } } : edge)); }} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px', flex: 1 }}>
-                          <option value="none">None</option>
-                          <option value="open">Open Arrow</option>
-                          <option value="arrow">Standard Arrow</option>
-                          <option value="filled">Solid Arrow</option>
-                          <option value="hollow">Hollow Arrow</option>
-                          <option value="diamond">Diamond</option>
-                          <option value="diamond_filled">Solid Diamond</option>
-                          <option value="circle">Circle</option>
-                          <option value="circle_filled">Solid Circle</option>
-                        </select>
-                      </div>
-                   </>
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>Routing</label>
+                      <select defaultValue={modalConfig.routing || 'sharp'} onChange={e => { takeSnapshot(); setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, routing: e.target.value } } : edge)); }} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px', flex: 1 }}>
+                        <option value="sharp">Sharp</option>
+                        <option value="rounded">Rounded</option>
+                        <option value="curved">Curved</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>Stroke Color</label>
+                      <input type="color" defaultValue={modalConfig.strokeColor} onChange={e => { setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, stroke: e.target.value } } : edge)); }} style={{ width: '40px', height: '32px', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer' }} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>Line Pattern</label>
+                      <select defaultValue={modalConfig.strokeDash?.join(',') || ''} onChange={e => { const val = e.target.value; setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, strokeDash: val ? val.split(',').map(Number) : [] } } : edge)); }} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px', flex: 1 }}>
+                        <option value="">Solid</option>
+                        <option value="6,6">Dashed</option>
+                        <option value="2,4">Dotted</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>Start Arrow</label>
+                      <select defaultValue={modalConfig.markerStart || 'none'} onChange={e => { setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, markerStart: e.target.value } } : edge)); }} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px', flex: 1 }}>
+                        <option value="none">None</option>
+                        <option value="open">Open Arrow</option>
+                        <option value="arrow">Standard Arrow</option>
+                        <option value="filled">Solid Arrow</option>
+                        <option value="hollow">Hollow Arrow</option>
+                        <option value="diamond">Diamond</option>
+                        <option value="diamond_filled">Solid Diamond</option>
+                        <option value="circle">Circle</option>
+                        <option value="circle_filled">Solid Circle</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <label style={{ fontSize: '13px', color: '#475569', width: '90px' }}>End Arrow</label>
+                      <select defaultValue={modalConfig.markerEnd || 'none'} onChange={e => { setEdges(eds => eds.map(edge => edge.id === modalConfig.edgeId ? { ...edge, data: { ...edge.data, markerEnd: e.target.value } } : edge)); }} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px', flex: 1 }}>
+                        <option value="none">None</option>
+                        <option value="open">Open Arrow</option>
+                        <option value="arrow">Standard Arrow</option>
+                        <option value="filled">Solid Arrow</option>
+                        <option value="hollow">Hollow Arrow</option>
+                        <option value="diamond">Diamond</option>
+                        <option value="diamond_filled">Solid Diamond</option>
+                        <option value="circle">Circle</option>
+                        <option value="circle_filled">Solid Circle</option>
+                      </select>
+                    </div>
+                  </>
                 ) : (
                   <>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -3011,7 +2774,7 @@ const getThemeStyles = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <label style={{ fontSize: '13px', color: '#475569', width: '80px' }}>Font Size</label>
                       <select defaultValue={modalConfig.fontSize} onChange={e => { setNodes(nds => nds.map(n => n.id === modalConfig.nodeId ? { ...n, data: { ...n.data, fontSize: Number(e.target.value) } } : n)); }} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '13px' }}>
-                        {[10,11,12,13,14,16,18,20,24,32].map(s => <option key={s} value={s}>{s}px</option>)}
+                        {[10, 11, 12, 13, 14, 16, 18, 20, 24, 32].map(s => <option key={s} value={s}>{s}px</option>)}
                       </select>
                     </div>
                   </>
@@ -3022,97 +2785,20 @@ const getThemeStyles = () => {
               <div style={{ textAlign: 'left' }}>
                 <textarea
                   defaultValue={modalConfig.nodeData}
-                  onChange={e => { try { const parsed = JSON.parse(e.target.value); setNodes(nds => nds.map(n => n.id === modalConfig.nodeId ? { ...n, data: parsed } : n)); } catch(err) {} }}
+                  onChange={e => { try { const parsed = JSON.parse(e.target.value); setNodes(nds => nds.map(n => n.id === modalConfig.nodeId ? { ...n, data: parsed } : n)); } catch (err) { } }}
                   style={{ width: '100%', minHeight: '200px', fontFamily: 'monospace', fontSize: '12px', padding: '12px', border: '1px solid #e2e8f0', borderRadius: '8px', resize: 'vertical', boxSizing: 'border-box' }}
                 />
                 <button className="anim-hover-bounce" onClick={() => setModalConfig(null)} style={{ marginTop: '12px', width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', background: 'transparent', color: '#475569', fontWeight: '600', cursor: 'pointer' }}>Save & Close</button>
               </div>
-            ) : modalConfig.type === 'ai_prompt' ? (
-              <div style={{ textAlign: 'left' }}>
-                <textarea 
-                  autoFocus
-                  placeholder="e.g. A library system with Books, Authors and a 'writes' relationship..."
-                  id="ai-prompt-input"
-                  style={{ width: '100%', height: '100px', padding: '12px', borderRadius: '12px', border: '1px solid #e2e8f0', fontSize: '14px', marginBottom: '16px', boxSizing: 'border-box', outline: 'none', resize: 'none' }} 
-                />
-                <button 
-                  className="anim-hover-bounce" 
-                  onClick={() => handleGenerateDiagram(document.getElementById('ai-prompt-input').value)} 
-                  style={{ width: '100%', padding: '12px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', color: '#ffffff', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                >
-                  <Sparkles size={18} /> Generate Diagram
-                </button>
-              </div>
-            ) : modalConfig.type === 'ai_image' ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                <div style={{ fontSize: '12px', color: '#64748b', textAlign: 'center', background: '#f8fafc', padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                  <strong>🙏 BETA:</strong> We apologize for any vision errors. Still learning.
-                </div>
-                
-                <div>
-                  <label style={{ fontSize: '13px', fontWeight: '700', color: '#475569', marginBottom: '5px', display: 'block' }}>Diagram Type</label>
-                  <select 
-                    id="ai-image-type-input"
-                    style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#fff', fontSize: '14px' }}
-                  >
-                    <option value="DFD">Data Flow (DFD)</option>
-                    <option value="ERD">Entity Relationship (ERD)</option>
-                    <option value="Flowchart">Flowchart</option>
-                    <option value="UML">UML Diagram</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '13px', fontWeight: '700', color: '#475569', marginBottom: '5px', display: 'block' }}>Upload Image</label>
-                  <input 
-                    type="file" 
-                    accept="image/*"
-                    onChange={(e) => setSelectedAiFile(e.target.files[0])}
-                    style={{ width: '100%', padding: '6px', border: '1px dashed #cbd5e1', borderRadius: '8px', cursor: 'pointer' }}
-                  />
-                  {selectedAiFile && <div style={{ fontSize: '11px', color: '#22c55e', marginTop: '4px' }}>✓ {selectedAiFile.name}</div>}
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '13px', fontWeight: '700', color: '#475569', marginBottom: '5px', display: 'block' }}>Modifications (Optional)</label>
-                  <textarea 
-                    id="ai-image-context-input"
-                    placeholder="e.g. 'Add a user entity'..."
-                    style={{ width: '100%', height: '60px', padding: '10px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '13px', resize: 'none' }}
-                  />
-                </div>
-
-                <button 
-                  className="anim-hover-bounce" 
-                  disabled={!selectedAiFile}
-                  onClick={() => {
-                    const type = document.getElementById('ai-image-type-input').value;
-                    const ctx = document.getElementById('ai-image-context-input').value;
-                    handleParseImage(selectedAiFile, ctx, type);
-                  }}
-                  style={{ 
-                    width: '100%', 
-                    padding: '12px', 
-                    borderRadius: '10px', 
-                    border: 'none', 
-                    background: selectedAiFile ? '#3b82f6' : '#e2e8f0', 
-                    color: '#ffffff', 
-                    fontWeight: '600', 
-                    cursor: selectedAiFile ? 'pointer' : 'not-allowed' 
-                  }}
-                >
-                  Analyze & Generate
-                </button>
-              </div>
             ) : modalConfig.type === 'prompt' ? (
               <div style={{ textAlign: 'left' }}>
-                <input 
+                <input
                   autoFocus
-                  type="text" 
-                  defaultValue={modalConfig.defaultValue} 
+                  type="text"
+                  defaultValue={modalConfig.defaultValue}
                   id="modal-prompt-input"
-                  onKeyDown={(e) => { if(e.key === 'Enter') { modalConfig.onConfirm(document.getElementById('modal-prompt-input').value); setModalConfig(null); } }}
-                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '14px', marginBottom: '16px', boxSizing: 'border-box', outline: 'none' }} 
+                  onKeyDown={(e) => { if (e.key === 'Enter') { modalConfig.onConfirm(document.getElementById('modal-prompt-input').value); setModalConfig(null); } }}
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '14px', marginBottom: '16px', boxSizing: 'border-box', outline: 'none' }}
                 />
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button className="anim-hover-bounce" onClick={() => setModalConfig(null)} style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', background: 'transparent', color: '#475569', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
@@ -3188,38 +2874,31 @@ const getThemeStyles = () => {
                 <button onClick={() => { setGridSize(25); setGridColor('#e0e0e0'); setShowGrid(true); setShowPageView(true); setShowShadow(false); setShowConnectionArrows(true); setShowConnectionPoints(false); setShowGuides(true); setPageSize('Letter'); setOrientation('portrait'); }} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: '12px', cursor: 'pointer' }}>Clear Default Style</button>
                 <button className="anim-hover-bounce" onClick={() => setModalConfig(null)} style={{ marginTop: '8px', padding: '10px', borderRadius: '8px', border: 'none', background: "var(--theme-color)", color: 'white', fontWeight: '600', cursor: 'pointer' }}>Apply & Close</button>
               </div>
-            ) : modalConfig.type === 'share' ? (
-              <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ padding: '16px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.1)' }}>
-                  <div style={{ fontSize: '13px', color: '#475569', marginBottom: '12px', lineHeight: '1.5' }}>Anyone with this link can view a read-only version of your diagram.</div>
-                  <div style={{ display: 'flex', gap: '8px', background: '#ffffff', padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                    <input 
-                      readOnly 
-                      value={modalConfig.link} 
-                      onClick={e => e.target.select()}
-                      style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', fontSize: '12px', color: '#1e293b', cursor: 'text' }} 
-                    />
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(modalConfig.link);
-                        setModalConfig({ ...modalConfig, copied: true });
-                      }}
-                      style={{ background: modalConfig.copied ? '#22c55e' : 'var(--theme-color)', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '4px' }}
-                    >
-                      {modalConfig.copied ? <Check size={14} /> : null}
-                      {modalConfig.copied ? 'Copied' : 'Copy Link'}
-                    </button>
-                  </div>
+            ) : modalConfig.type === 'share_panel' ? (
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '24px' }}>
+                  {['WhatsApp', 'Email', 'Drive', 'Slack', 'Teams', 'Messages'].map(soft => (
+                    <div key={soft} onClick={() => { exportDiagram('png'); setModalConfig({ type: 'alert', title: 'Shared!', message: `Your diagram has been prepared for ${soft}.` }); }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                      <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: "var(--theme-color)" }}>
+                        <Image size={24} />
+                      </div>
+                      <span style={{ fontSize: '11px', fontWeight: '600', color: '#475569' }}>{soft}</span>
+                    </div>
+                  ))}
                 </div>
-                <button className="anim-hover-bounce" onClick={closeModal} style={{ padding: '12px', borderRadius: '10px', background: '#f1f5f9', border: 'none', color: '#475569', fontWeight: '600', cursor: 'pointer' }}>Done</button>
+                <div style={{ padding: '12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input readOnly value="https://smartdiagram.app/s/72a1b3..." style={{ flex: 1, background: 'transparent', border: 'none', fontSize: '12px', color: '#64748b', outline: 'none' }} />
+                  <button onClick={() => { navigator.clipboard?.writeText("https://smartdiagram.app/s/72a1b3..."); setModalConfig({ type: 'alert', title: '🔗 Link Copied!', message: 'Shareable link copied to clipboard.' }); }} style={{ padding: '4px 12px', borderRadius: '4px', background: "var(--theme-color)", color: 'white', border: 'none', fontSize: '11px', fontWeight: '600', cursor: 'pointer' }}>Copy</button>
+                </div>
+                <button className="anim-hover-bounce" onClick={() => setModalConfig(null)} style={{ marginTop: '20px', width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', background: 'transparent', color: '#475569', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
               </div>
             ) : modalConfig.type === 'menu_search' ? (
               <div style={{ textAlign: 'left' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '16px' }}>
                   <Search size={18} color="#94a3b8" />
-                  <input 
+                  <input
                     autoFocus
-                    placeholder="Search actions (Save, Export, Grid...)" 
+                    placeholder="Search actions (Save, Export, Grid...)"
                     onChange={e => {
                       const q = e.target.value.toLowerCase();
                       const results = [];
@@ -3232,14 +2911,14 @@ const getThemeStyles = () => {
                       });
                       setModalConfig(prev => ({ ...prev, results }));
                     }}
-                    style={{ background: 'transparent', border: 'none', outline: 'none', fontSize: '14px', flex: 1 }} 
+                    style={{ background: 'transparent', border: 'none', outline: 'none', fontSize: '14px', flex: 1 }}
                   />
                 </div>
                 <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   {(modalConfig.results || []).map((res, i) => (
-                    <div 
-                      key={i} 
-                      onClick={() => { 
+                    <div
+                      key={i}
+                      onClick={() => {
                         if (res.category === 'File') handleFileMenu(res.label);
                         else if (res.category === 'Edit') handleEditMenu(res.label);
                         else if (res.category === 'View') handleViewMenu(res.label);
@@ -3269,8 +2948,8 @@ const getThemeStyles = () => {
                 <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>Choose a primary color for the interface.</p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px' }}>
                   {['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#6366f1', '#f97316', '#64748b'].map(color => (
-                    <div 
-                      key={color} 
+                    <div
+                      key={color}
                       onClick={() => { setThemeColor(color); setModalConfig(null); }}
                       style={{ height: '40px', borderRadius: '8px', background: color, cursor: 'pointer', border: themeColor === color ? '3px solid #0f172a' : 'none', transform: themeColor === color ? 'scale(1.1)' : 'scale(1)' }}
                       className="anim-hover-bounce"
@@ -3282,7 +2961,7 @@ const getThemeStyles = () => {
             ) : modalConfig.type === 'appearance_customizer' ? (
               <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>Override default background colors for specific panels.</p>
-                
+
                 <div>
                   <label style={{ fontSize: '12px', fontWeight: '600', color: '#475569', display: 'block', marginBottom: '4px' }}>Canvas Grid Background</label>
                   <div style={{ display: 'flex', gap: '8px' }}>
@@ -3314,7 +2993,7 @@ const getThemeStyles = () => {
                     <button className="anim-hover-bounce" onClick={() => setCustomAppearance(prev => ({ ...prev, format: '' }))} style={{ flex: 1, padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b', cursor: 'pointer' }}>Reset Default</button>
                   </div>
                 </div>
-                
+
                 <button className="anim-hover-bounce" onClick={closeModal} style={{ marginTop: '8px', width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', background: 'transparent', color: '#475569', fontWeight: '600', cursor: 'pointer' }}>Close Customizer</button>
               </div>
             ) : modalConfig.type === 'theme_selector' ? (
@@ -3329,7 +3008,7 @@ const getThemeStyles = () => {
                     { mode: 'blue', name: 'Ocean', bg: '#082f49', border: '#0369a1', text: '#bae6fd' },
                     { mode: 'green', name: 'Forest', bg: '#052e16', border: '#14532d', text: '#bbf7d0' }
                   ].map(t => (
-                    <div 
+                    <div
                       key={t.mode}
                       onClick={() => { setThemeMode(t.mode); closeModal(); }}
                       className="anim-hover-bounce"
@@ -3350,7 +3029,7 @@ const getThemeStyles = () => {
                   <button className="anim-hover-bounce" onClick={async () => {
                     const msg = document.getElementById('feedback-message-input')?.value || '';
                     if (!msg.trim()) return;
-                    
+
                     try {
                       setModalConfig({ type: 'alert', title: 'Sending...', message: 'Sending your feedback...' });
                       const response = await fetch(`${API_BASE}/api/feedback`, {
@@ -3358,7 +3037,7 @@ const getThemeStyles = () => {
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ message: msg })
                       });
-                      
+
                       if (response.ok) {
                         setModalConfig({ type: 'alert', title: 'Feedback Sent', message: 'Thank you! Your feedback has been successfully sent to the developer.' });
                       } else {
@@ -3373,48 +3052,66 @@ const getThemeStyles = () => {
               </div>
             ) : modalConfig.type === 'system_info' ? (
               <div style={{ textAlign: 'left', lineHeight: '1.5', fontSize: '13px', color: '#334155', maxHeight: '450px', overflowY: 'auto', paddingRight: '10px' }}>
-                <div style={{ marginBottom: '16px', padding: '12px', background: '#eff6ff', borderRadius: '8px', border: '1px solid #bfdbfe', color: '#1e40af' }}>
-                  <p style={{ margin: 0, fontWeight: '700', fontSize: '14px' }}>🚀 Smart Diagram Studio v9.0 (Enterprise Beta)</p>
-                  <p style={{ margin: '4px 0 0 0' }}>The AI vision-driven diagramming pipeline is now stabilized. This version introduces the Grid Master Engine and Port 5005 standard for maximum reliability.</p>
+                <div style={{ marginBottom: '16px', padding: '12px', background: '#fffbeb', borderRadius: '8px', border: '1px solid #fde68a', color: '#92400e' }}>
+                  <p style={{ margin: 0, fontWeight: '700', fontSize: '14px' }}>⚠️ Beta Version</p>
+                  <p style={{ margin: '4px 0 0 0' }}>This is a beta version. Some features may not work perfectly yet, but we are working to implement improvements faster. Please support us by sharing your valuable feedback!</p>
                 </div>
-                
                 <div style={{ marginBottom: '20px' }}>
-                  <h3 style={{ fontSize: '16px', color: '#0f172a', marginBottom: '8px' }}>Studio Architecture <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 'normal', marginLeft: '6px' }}>v9.0 Stable</span></h3>
-                  <p>Our platform uses a Triple-Layer AI Resilience system to ensure your diagrams are parsed correctly every time.</p>
+                  <h3 style={{ fontSize: '16px', color: '#0f172a', marginBottom: '8px' }}>Smart Diagram Workspace <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 'normal', marginLeft: '6px' }}>v1.0 Beta</span></h3>
+                  <p>This system is a modern diagramming interface that supports standard drawing features for ER Diagrams, Flowcharts, and more.</p>
                 </div>
 
                 <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #e2e8f0' }}>
-                  <h4 style={{ fontSize: '14px', color: '#0f172a', margin: '0 0 8px 0' }}>Core Engine Details</h4>
+                  <h4 style={{ fontSize: '14px', color: '#0f172a', margin: '0 0 8px 0' }}>Core Architecture</h4>
                   <ul style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <li><strong>Grid Master v3.6.8</strong>: Forced spatial layout with 0% node overlap.</li>
-                    <li><strong>Triple-Layer Resilience</strong>: Automatic failover between Gemini 2.0, 1.5, and Llama 4 Scout.</li>
-                    <li><strong>Atomic Pages</strong>: New diagrams are generated in fresh pages to protect existing data.</li>
-                    <li><strong>Port 5005 Migration</strong>: Enhanced security and process isolation.</li>
+                    <li><strong>Version:</strong> 1.0 Beta</li>
+                    <li><strong>Canvas:</strong> React Flow (v12) with Draw.io connectors</li>
+                    <li><strong>State:</strong> React useState/useRef architecture</li>
                   </ul>
                 </div>
 
                 <div style={{ marginBottom: '20px' }}>
-                  <h4 style={{ fontSize: '14px', color: '#0f172a', marginBottom: '6px' }}>Cloud Connectivity</h4>
-                  <p>Signed-in users benefit from real-time <strong>Cloud History</strong> sync. All edits are backed up to our secure Firebase infrastructure.</p>
+                  <h4 style={{ fontSize: '14px', color: '#0f172a', marginBottom: '6px' }}>Privacy & Policies</h4>
+                  <p>Your diagrams are stored locally in your browser by default. Cloud synchronization is only active when signed in via Google Auth. We do not sell your diagram data.</p>
                 </div>
 
-                <div style={{ marginBottom: '24px', textAlign: 'center', position: 'sticky', bottom: 0, background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(4px)', padding: '10px 0' }}>
-                  <button className="anim-hover-bounce" onClick={closeModal} style={{ padding: '10px 32px', borderRadius: '8px', border: 'none', background: "var(--theme-color)", color: 'white', fontWeight: '600', cursor: 'pointer' }}>Close System Details</button>
+                <div style={{ marginBottom: '20px' }}>
+                  <h4 style={{ fontSize: '14px', color: '#0f172a', marginBottom: '6px' }}>Terms of Use</h4>
+                  <p>Smart Diagram is provided "as is". Users are responsible for backing up their diagrams via JSON export. AI-generated content should be verified for logical accuracy by the user.</p>
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <h4 style={{ fontSize: '14px', color: '#0f172a', marginBottom: '6px' }}>Future Updates</h4>
+                  <ul style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <li>Collaborative real-time editing (Multiplayer)</li>
+                    <li>Extended shape libraries (BPMN, AWS, GCP)</li>
+                    <li>Plugin system for custom shape generators</li>
+                  </ul>
+                </div>
+
+                <div style={{ marginBottom: '12px', padding: '12px', background: '#eff6ff', borderRadius: '8px', border: '1px solid #bfdbfe' }}>
+                  <h4 style={{ fontSize: '14px', color: '#1e40af', marginBottom: '6px' }}>Contact & Support</h4>
+                  <p>For enterprise inquiries or support: <strong>myprojectz.a1@gmail.com</strong></p>
+                  <p style={{ marginTop: '4px' }}>Report bugs via the <strong>Feedback</strong> tool in the sidebar.</p>
+                </div>
+
+                <div style={{ marginTop: '24px', textAlign: 'center', position: 'sticky', bottom: 0, background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(4px)', padding: '10px 0' }}>
+                  <button className="anim-hover-bounce" onClick={closeModal} style={{ padding: '10px 32px', borderRadius: '8px', border: 'none', background: "var(--theme-color)", color: 'white', fontWeight: '600', cursor: 'pointer' }}>Close Details</button>
                 </div>
               </div>
             ) : (
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-                <button 
+                <button
                   className="anim-hover-bounce"
-                  onClick={closeModal} 
+                  onClick={closeModal}
                   style={{ padding: '10px 20px', borderRadius: '8px', border: '1px solid #cbd5e1', background: 'transparent', color: '#475569', fontWeight: '600', cursor: 'pointer' }}
                 >
                   {modalConfig.type === 'confirm' ? 'Cancel' : 'Dismiss'}
                 </button>
                 {modalConfig.type === 'confirm' && (
-                  <button 
+                  <button
                     className="anim-hover-bounce"
-                    onClick={() => { modalConfig.onConfirm(); closeModal(); }} 
+                    onClick={() => { modalConfig.onConfirm(); closeModal(); }}
                     style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', background: '#e11d48', color: 'white', fontWeight: '600', cursor: 'pointer', boxShadow: '0 4px 6px -1px rgba(225, 29, 72, 0.2)' }}
                   >
                     Delete
@@ -3426,48 +3123,8 @@ const getThemeStyles = () => {
         </div>
       )}
 
-      {/* GLOBAL AI LOADING OVERLAY */}
-      {isAiProcessing && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
-          backgroundColor: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(20px)',
-          zIndex: 10000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          pointerEvents: 'all'
-        }}>
-          <div className="rgb-border anim-modal-card" style={{ 
-            padding: '60px 40px', 
-            background: 'rgba(255, 255, 255, 0.95)', 
-            borderRadius: '24px', 
-            display: 'flex', 
-            flexDirection: 'column', 
-            alignItems: 'center', 
-            gap: '32px', 
-            width: '480px',
-            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
-          }}>
-            <div style={{ position: 'relative', width: '80px', height: '80px' }}>
-              <div style={{ position: 'absolute', inset: 0, border: '4px solid #f1f5f9', borderRadius: '50%' }} />
-              <div style={{ position: 'absolute', inset: 0, border: '4px solid #3b82f6', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1.5s linear infinite' }} />
-              <div style={{ position: 'absolute', inset: '10px', border: '4px solid #60a5fa', borderBottomColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear reverse infinite' }} />
-              <Sparkles size={32} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: "var(--theme-color)", animation: 'pulseSubtle 2s infinite' }} />
-            </div>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
-              <div style={{ fontSize: '24px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.02em' }}>AI is structuring your diagram...</div>
-              <div key={aiStatusMessage} style={{ fontSize: '15px', color: '#64748b', fontWeight: '500', animation: 'modalFadeIn 0.5s ease-out' }}>
-                {aiStatusMessage}
-              </div>
-            </div>
 
-            <div style={{ width: '100%', maxWidth: '300px', height: '6px', background: '#f1f5f9', borderRadius: '3px', overflow: 'hidden', position: 'relative' }}>
-              <div style={{ position: 'absolute', top: 0, left: 0, height: '100%', width: '100%', background: 'linear-gradient(90deg, transparent, #3b82f6, transparent)', animation: 'loading-bar-smooth 2s infinite linear' }} />
-            </div>
-            
-            <div style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic' }}>This usually takes a few seconds...</div>
-          </div>
-        </div>
-      )}
-      
+
       <input type="file" ref={fileInputRef} hidden accept=".json" onChange={handleFileUpload} />
     </div>
   );

@@ -24,7 +24,7 @@ export const SIDEBAR_CATEGORIES = [
       { id: "conn_aggregation", label: "Aggregation", isEdge: true, routing: "orthogonal", startArrow: "diamond_hollow", endArrow: "none", strokeStyle: "solid" },
       { id: "conn_composition", label: "Composition", isEdge: true, routing: "orthogonal", startArrow: "diamond_filled", endArrow: "none", strokeStyle: "solid" },
       { id: "conn_bidirectional", label: "Bidirectional", isEdge: true, routing: "orthogonal", startArrow: "open", endArrow: "open", strokeStyle: "solid" },
-      { id: "conn_noArrow", label: "No Arrow", isEdge: true, routing: "orthogonal", startArrow: "none", endArrow: "none", strokeStyle: "solid" },
+      { id: "conn_noArrow", label: "Line", isEdge: true, routing: "orthogonal", startArrow: "none", endArrow: "none", strokeStyle: "solid" },
       { id: "conn_dashedPlain", label: "Dashed Plain", isEdge: true, routing: "orthogonal", startArrow: "none", endArrow: "none", strokeStyle: "dashed" },
       { id: "conn_dotted", label: "Dotted", isEdge: true, routing: "orthogonal", startArrow: "none", endArrow: "none", strokeStyle: "dotted" },
       { id: "conn_crowsFoot", label: "Crows Foot", isEdge: true, routing: "orthogonal", startArrow: "none", endArrow: "ERone", strokeStyle: "solid" },
